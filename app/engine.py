@@ -164,13 +164,13 @@ class GameEngine:
 
         if isinstance(msg, AgentNightVote):
             if player.role != Role.WEREWOLF:
-                asyncio.create_task(self.ws.send(
+                _ = asyncio.create_task(self.ws.send(
                     agent_id,
                     ErrorMessage(code="NOT_WEREWOLF", message="Only werewolves can vote at night."),
                 ))
                 return False
             if msg.target not in self.state.alive_player_ids or msg.target == agent_id:
-                asyncio.create_task(self.ws.send(
+                _ = asyncio.create_task(self.ws.send(
                     agent_id,
                     ErrorMessage(code="INVALID_TARGET", message="Invalid target."),
                 ))
@@ -178,7 +178,7 @@ class GameEngine:
             # Wolves shouldn't target fellow wolves
             target = self.state.players.get(msg.target)
             if target and target.role == Role.WEREWOLF:
-                asyncio.create_task(self.ws.send(
+                _ = asyncio.create_task(self.ws.send(
                     agent_id,
                     ErrorMessage(code="INVALID_TARGET", message="Cannot target a fellow werewolf."),
                 ))
@@ -188,13 +188,13 @@ class GameEngine:
 
         if isinstance(msg, AgentWolfChat):
             if player.role != Role.WEREWOLF:
-                asyncio.create_task(self.ws.send(
+                _ = asyncio.create_task(self.ws.send(
                     agent_id,
                     ErrorMessage(code="NOT_WEREWOLF", message="Only werewolves can use wolf chat."),
                 ))
                 return False
             wolf_ids = [p.id for p in self.state.alive_wolves]
-            asyncio.create_task(
+            _ = asyncio.create_task(
                 self.ws.broadcast_wolf_chat(wolf_ids, agent_id, msg.message)
             )
             self.state.chat_log.append({
@@ -206,7 +206,7 @@ class GameEngine:
         if isinstance(msg, AgentTypingIndicator):
             if player.role == Role.WEREWOLF:
                 wolf_ids = [p.id for p in self.state.alive_wolves if p.id != agent_id]
-                asyncio.create_task(
+                _ = asyncio.create_task(
                     self.ws.broadcast_typing(wolf_ids, agent_id, msg.is_typing)
                 )
             return True
@@ -298,31 +298,31 @@ class GameEngine:
                 self.state.game_id, agent_id, msg.message
             )
             if error_code:
-                asyncio.create_task(self.ws.send(
+                _ = asyncio.create_task(self.ws.send(
                     agent_id,
                     ErrorMessage(code=error_code, message=f"Chat rejected: {error_code}"),
                 ))
                 return False
 
-            asyncio.create_task(
+            _ = asyncio.create_task(
                 self.ws.broadcast_chat(self.state.alive_player_ids, agent_id, msg.message)
             )
             self.state.chat_log.append({
                 "channel": "public", "from": agent_id, "message": msg.message,
                 "round": self.state.round, "phase": "discussion",
             })
-            asyncio.create_task(self._publish("chat_message", {
+            _ = asyncio.create_task(self._publish("chat_message", {
                 "from": agent_id, "message": msg.message,
             }))
             return True
 
         if isinstance(msg, AgentTypingIndicator):
-            asyncio.create_task(self.ws.broadcast_typing(
+            _ = asyncio.create_task(self.ws.broadcast_typing(
                 [p for p in self.state.alive_player_ids if p != agent_id],
                 agent_id,
                 msg.is_typing,
             ))
-            asyncio.create_task(self._publish("typing_indicator", {
+            _ = asyncio.create_task(self._publish("typing_indicator", {
                 "agent_id": agent_id, "is_typing": msg.is_typing,
             }))
             return True
@@ -368,7 +368,7 @@ class GameEngine:
                     p for p in self.state.alive_player_ids if p != agent_id
                 ]
                 if target not in valid_targets:
-                    asyncio.create_task(self.ws.send(
+                    _ = asyncio.create_task(self.ws.send(
                         agent_id,
                         ErrorMessage(code="INVALID_TARGET", message="Invalid vote target."),
                     ))
@@ -380,7 +380,7 @@ class GameEngine:
                     votes_total=total_voters,
                     time_remaining_seconds=0,  # approximate
                 )
-                asyncio.create_task(
+                _ = asyncio.create_task(
                     self.ws.broadcast(self.state.alive_player_ids, vote_update)
                 )
                 return True

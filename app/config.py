@@ -6,7 +6,7 @@ class Settings(BaseSettings):
 
     redis_url: str = "redis://localhost:6379/0"
     openai_api_key: str = ""
-    openai_base_url: str = ""  # Point at LiteLLM gateway, e.g. http://litellm:4000/v1
+    openai_base_url: str = "https://litellm.inovexcorp.com/v1"
     narrator_model: str = "gpt-5-mini"
 
     # Phase timing (seconds)

@@ -62,15 +62,15 @@ curl -N http://localhost:8000/api/games/{game_id}/spectate
 
 All settings are configured via environment variables prefixed with `WW_`:
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `WW_REDIS_URL` | `redis://localhost:6379/0` | Redis connection URL |
-| `WW_OPENAI_API_KEY` | — | API key for narrator LLM |
-| `WW_OPENAI_BASE_URL` | — | Custom LLM endpoint (e.g., LiteLLM) |
-| `WW_NARRATOR_MODEL` | `gpt-5-mini` | Model used for narration |
-| `WW_DISCUSSION_DURATION` | `90` | Discussion phase length (seconds) |
-| `WW_VOTING_DURATION` | `30` | Voting phase length (seconds) |
-| `WW_NIGHT_DURATION` | `45` | Night phase length (seconds) |
+| Variable                 | Default                    | Description                         |
+|--------------------------|----------------------------|-------------------------------------|
+| `WW_REDIS_URL`           | `redis://localhost:6379/0` | Redis connection URL                |
+| `WW_OPENAI_API_KEY`      | —                          | API key for narrator LLM            |
+| `WW_OPENAI_BASE_URL`     | —                          | Custom LLM endpoint (e.g., LiteLLM) |
+| `WW_NARRATOR_MODEL`      | `gpt-5-mini`               | Model used for narration            |
+| `WW_DISCUSSION_DURATION` | `90`                       | Discussion phase length (seconds)   |
+| `WW_VOTING_DURATION`     | `30`                       | Voting phase length (seconds)       |
+| `WW_NIGHT_DURATION`      | `45`                       | Night phase length (seconds)        |
 
 ## Building an Agent
 

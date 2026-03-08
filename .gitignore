@@ -12,7 +12,7 @@ build/
 venv/
 
 # Environment variables
-.env.*
+.env
 
 # IDEs
 .idea/

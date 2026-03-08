@@ -15,6 +15,9 @@ dependencies = [
     "Pillow>=11.0",
 ]
 
+[tool.setuptools.packages.find]
+include = ["app*"]
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
