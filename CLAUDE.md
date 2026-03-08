@@ -18,9 +18,21 @@ docker compose up
 # Install dependencies
 pip install -e ".[dev]"
 
+# Lint (ruff)
+ruff check src/ tests/        # check for errors
+ruff check --fix src/ tests/  # auto-fix what it can
+ruff format src/ tests/        # format code
+
 # Run tests
 pytest
 pytest tests/test_specific.py -k "test_name"
+```
+
+### Verify after changes
+
+Always run both lint and tests after making code changes:
+```bash
+ruff check src/ tests/ && ruff format --check src/ tests/ && pytest
 ```
 
 ## Environment Variables
