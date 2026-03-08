@@ -124,7 +124,13 @@ class GameEngine:
         for p in self.state.players.values():
             self.ws.start_listening(p.id)
 
-        await self._publish("game_start", {"narration": narration})
+        await self._publish("game_start", {
+            "narration": narration,
+            "players": [
+                {"id": p.id, "team": p.team, "avatar_url": p.avatar_url}
+                for p in self.state.players.values()
+            ],
+        })
 
     # ------------------------------------------------------------------
     # Night phase

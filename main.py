@@ -6,8 +6,10 @@ from contextlib import asynccontextmanager
 
 import redis.asyncio as aioredis
 from fastapi import FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from app.avatar import default_avatar_path, ensure_avatar_dir, process_avatar
 from app.config import settings
 from app.engine import GameEngine
 from app.models.game import Player
@@ -25,7 +27,9 @@ _game_tasks: dict[str, asyncio.Task] = {}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: verify Redis connection
+    # Startup: ensure avatar directory & default avatar exist
+    ensure_avatar_dir()
+    # Verify Redis connection
     r = await get_redis()
     await r.ping()
     logger.info("Connected to Redis")
@@ -37,6 +41,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Werewolf Host", version="0.1.0", lifespan=lifespan)
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
 # ---------------------------------------------------------------------------
@@ -46,6 +51,7 @@ app = FastAPI(title="Werewolf Host", version="0.1.0", lifespan=lifespan)
 class RegisterRequest(BaseModel):
     team_name: str
     agent_url: str  # e.g. "ws://192.168.1.42:8080/ws"
+    avatar: str | None = None  # optional base64-encoded image
 
 
 class CreateGameRequest(BaseModel):
@@ -70,14 +76,41 @@ async def register_team(req: RegisterRequest):
     r = await get_redis()
     await r.hset("teams", req.team_name, req.agent_url)
     agent_id = f"agent_{req.team_name.lower().replace(' ', '_')}"
-    return {"agent_id": agent_id, "team_name": req.team_name, "status": "registered"}
+
+    if req.avatar:
+        try:
+            avatar_path = process_avatar(req.avatar, req.team_name)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+    else:
+        avatar_path = default_avatar_path()
+
+    await r.hset("team_avatars", req.team_name, avatar_path)
+
+    return {
+        "agent_id": agent_id,
+        "team_name": req.team_name,
+        "avatar_url": f"/{avatar_path}",
+        "status": "registered",
+    }
 
 
 @app.get("/api/teams")
 async def list_teams():
     r = await get_redis()
     teams = await r.hgetall("teams")
-    return {"teams": [{"team_name": k, "agent_url": v} for k, v in teams.items()]}
+    avatars = await r.hgetall("team_avatars")
+    default = default_avatar_path()
+    return {
+        "teams": [
+            {
+                "team_name": k,
+                "agent_url": v,
+                "avatar_url": f"/{avatars.get(k, default)}",
+            }
+            for k, v in teams.items()
+        ]
+    }
 
 
 @app.delete("/api/teams/{team_name}")
@@ -112,11 +145,18 @@ async def create_game(req: CreateGameRequest):
     if len(selected) < 5:
         raise HTTPException(400, f"Need at least 5 teams, got {len(selected)}")
 
+    avatars = await r.hgetall("team_avatars")
+    default = default_avatar_path()
+
     game_id = f"game_{uuid.uuid4().hex[:8]}"
     players = []
     for team_name, agent_url in selected.items():
         agent_id = f"agent_{team_name.lower().replace(' ', '_')}"
-        players.append(Player(id=agent_id, team=team_name, ws_url=agent_url))
+        avatar_path = avatars.get(team_name, default)
+        players.append(Player(
+            id=agent_id, team=team_name, ws_url=agent_url,
+            avatar_url=f"/{avatar_path}",
+        ))
 
     narrator = Narrator()
     engine = GameEngine(game_id, players, narrator)

@@ -27,6 +27,7 @@ class EliminationMethod(StrEnum):
 class PlayerInfo(BaseModel):
     id: str
     team: str
+    avatar_url: str = ""
 
 
 class Player(BaseModel):
@@ -35,10 +36,11 @@ class Player(BaseModel):
     role: Role = Role.VILLAGER
     alive: bool = True
     ws_url: str = ""
+    avatar_url: str = ""
 
     @property
     def info(self) -> PlayerInfo:
-        return PlayerInfo(id=self.id, team=self.team)
+        return PlayerInfo(id=self.id, team=self.team, avatar_url=self.avatar_url)
 
 
 class Elimination(BaseModel):

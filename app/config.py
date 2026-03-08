@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     # Spectator
     spectator_wolf_chat_delay: int = 0  # 0 = hidden until game end
 
+    # Avatars
+    avatar_max_size_px: int = 512
+    avatar_max_upload_bytes: int = 2_097_152  # 2 MB
+    avatar_dir: str = "static/avatars"
+
 
 settings = Settings()
 
