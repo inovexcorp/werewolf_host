@@ -1,7 +1,7 @@
 .PHONY: all lint test container help run run_container
 
 ENGINE := $(shell command -v podman > /dev/null 2>&1 && echo podman || echo docker)
-
+IMAGE  := docker.io/inovexis/werewolf_host:local
 help:
 	@echo "Available make commands:"
 	@echo "  make build         - Run lint, test, and container build"
@@ -22,10 +22,10 @@ test:
 	pytest
 
 container:
-	$(ENGINE) build -t docker.io/inovexis/werewolf_host:local .
+	$(ENGINE) build -t $(IMAGE) .
 
 run_container: lint test container
-	$(ENGINE) run -p 8080:8080 --rm --name werewolf_host_local docker.io/inovexis/werewolf_host:local
+	$(ENGINE) run -p 8000:8000 --rm --name werewolf_host_local $(IMAGE)
 
 run: lint test
-	uvicorn main:app --host 0.0.0.0 --port 8080 --env-file .env
+	uvicorn main:app --host 0.0.0.0 --port 8000 --env-file .env
