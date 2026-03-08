@@ -13,7 +13,7 @@ help:
 	@echo "  make help          - Show this help message"
 
 
-build: lint test container
+build: lint test
 
 lint:
 	ruff check src/ tests/
@@ -21,7 +21,7 @@ lint:
 test:
 	pytest
 
-container:
+container: build
 	$(ENGINE) build -t $(IMAGE) .
 
 run_container: lint test container

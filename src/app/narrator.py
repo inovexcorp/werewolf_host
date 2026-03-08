@@ -224,6 +224,40 @@ class Narrator:
             max_tokens=600,
         )
 
+    async def generate_wolf_kickoff(self, round_num: int) -> str:
+        """Generate a 1-2 sentence conspiratorial prompt for wolves to strategize."""
+        text = await self._generate(
+            f"Round {round_num}: The wolves are awake in their private channel. "
+            "In 1-2 sentences, urge the wolves to coordinate and choose a target. "
+            "Be conspiratorial and dramatic.",
+            max_tokens=150,
+        )
+        return (
+            text
+            or "The wolves are awake. This is your private channel — strategize. "
+            "Who should not see another dawn?"
+        )
+
+    async def generate_discussion_kickoff(self, round_num: int) -> str:
+        """Generate a 1-2 sentence urgent prompt for village discussion."""
+        text = await self._generate(
+            f"Round {round_num}: The village gathers for discussion. "
+            "In 1-2 sentences, urge the villagers to speak up and find the wolves. "
+            "Be dramatic and urgent.\n\n"
+            "CRITICAL RULES — you MUST follow these:\n"
+            "- NEVER reveal who the werewolves are or hint at their identities\n"
+            "- NEVER reference what happened in the wolves' private chat\n"
+            "- NEVER reveal night vote targets or who voted for whom\n"
+            "- Only reference publicly known information: who was killed, "
+            "who was banished, and what was said in public discussion",
+            max_tokens=150,
+        )
+        return (
+            text
+            or "The village gathers. Someone among you is a wolf. "
+            "Speak now — or forever hold your peace."
+        )
+
     async def narrate_game_start(self, players: list[PlayerInfo]) -> str:
         """Narrate the beginning of a new game."""
         names = ", ".join(p.team for p in players)
@@ -267,6 +301,38 @@ class Narrator:
             f"The reveal: they were an innocent villager. "
             "Make this a tragic, gut-wrenching moment — the wolves are still out there."
         )
+
+    async def narrate_vote_summary(
+        self,
+        round_num: int,
+        final_votes: dict[str, str],
+        banished_team: str | None,
+        had_runoff: bool,
+        first_round_votes: dict[str, str] | None = None,
+    ) -> str:
+        """Narrate a dramatic vote summary for all players."""
+        lines: list[str] = [f"Round {round_num} vote results:"]
+
+        if had_runoff and first_round_votes:
+            lines.append("First round votes:")
+            for voter, target in first_round_votes.items():
+                lines.append(f"  {voter} → {target}")
+
+        lines.append("Final votes:" if had_runoff else "Votes:")
+        for voter, target in final_votes.items():
+            lines.append(f"  {voter} → {target}")
+
+        if banished_team:
+            lines.append(f"Result: {banished_team} was banished.")
+        else:
+            lines.append("Result: No one was banished.")
+
+        lines.append(
+            "Narrate this vote dramatically. Reference specific votes and alliances. "
+            "4-6 sentences. Do NOT reveal anyone's role or identity as wolf/villager."
+        )
+
+        return await self._generate("\n".join(lines), max_tokens=600)
 
     async def narrate_game_end(self, winner: str, final_roles: dict[str, str]) -> str:
         """Narrate the dramatic game conclusion."""

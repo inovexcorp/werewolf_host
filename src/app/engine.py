@@ -24,6 +24,7 @@ from app.models.messages import (
     GameEndMessage,
     GameStartMessage,
     PhaseChangeMessage,
+    VoteResultMessage,
     VoteUpdateMessage,
 )
 from app.narrator import Narrator
@@ -32,6 +33,8 @@ from app.redis import publish_event
 from app.ws_manager import ConnectionManager
 
 logger = logging.getLogger(__name__)
+
+NARRATOR_ID = "narrator"
 
 
 class GameEngine:
@@ -48,6 +51,7 @@ class GameEngine:
         self.host_backstory = host_backstory
         self._phase_task: asyncio.Task | None = None
         self._had_runoff: bool = False
+        self._first_round_votes: dict[str, str] = {}
         self._background_tasks: set[asyncio.Task] = set()
 
         for p in players:
@@ -179,6 +183,28 @@ class GameEngine:
             "phase_change", {"phase": "night", "round": self.state.round}
         )
 
+        # Narrator kickoff message to wolf chat
+        wolf_ids = [p.id for p in self.state.alive_wolves]
+        kickoff = await self.narrator.generate_wolf_kickoff(self.state.round)
+        await self.ws.broadcast_wolf_chat(wolf_ids, NARRATOR_ID, kickoff)
+        await self._publish(
+            "wolf_chat_message",
+            {
+                "from": NARRATOR_ID,
+                "message": kickoff,
+                "round": self.state.round,
+            },
+        )
+        self.state.chat_log.append(
+            {
+                "channel": "wolf",
+                "from": NARRATOR_ID,
+                "message": kickoff,
+                "round": self.state.round,
+                "phase": "night",
+            }
+        )
+
         await self._collect_messages_for(
             settings.night_duration,
             allowed_handler=self._handle_night_message,
@@ -240,6 +266,16 @@ class GameEngine:
             wolf_ids = [p.id for p in self.state.alive_wolves]
             self._fire_and_forget(
                 self.ws.broadcast_wolf_chat(wolf_ids, agent_id, msg.message)
+            )
+            self._fire_and_forget(
+                self._publish(
+                    "wolf_chat_message",
+                    {
+                        "from": agent_id,
+                        "message": msg.message,
+                        "round": self.state.round,
+                    },
+                )
             )
             self.state.chat_log.append(
                 {
@@ -342,6 +378,26 @@ class GameEngine:
             "phase_change", {"phase": "discussion", "round": self.state.round}
         )
 
+        # Narrator kickoff message to public chat
+        kickoff = await self.narrator.generate_discussion_kickoff(self.state.round)
+        await self.ws.broadcast_chat(self.state.alive_player_ids, NARRATOR_ID, kickoff)
+        await self._publish(
+            "chat_message",
+            {
+                "from": NARRATOR_ID,
+                "message": kickoff,
+            },
+        )
+        self.state.chat_log.append(
+            {
+                "channel": "public",
+                "from": NARRATOR_ID,
+                "message": kickoff,
+                "round": self.state.round,
+                "phase": "discussion",
+            }
+        )
+
         await self._collect_messages_for(
             settings.discussion_duration,
             allowed_handler=self._handle_discussion_message,
@@ -357,6 +413,7 @@ class GameEngine:
             if entry.get("round") == self.state.round
             and entry.get("phase") == "discussion"
             and entry.get("channel") == "public"
+            and entry.get("from") != NARRATOR_ID
         ]
         self.narrator.summary.record_discussion_highlights(
             self.state.round, round_chats
@@ -434,11 +491,14 @@ class GameEngine:
 
     async def _voting_phase(self) -> Player | None:
         self._had_runoff = False
+        self._first_round_votes = {}
         return await self._run_vote_round(settings.voting_duration, is_runoff=False)
 
     async def _run_vote_round(
         self, duration: int, is_runoff: bool, candidates: list[str] | None = None
     ) -> Player | None:
+        if is_runoff:
+            self._first_round_votes = dict(self.state.banishment_votes)
         phase = Phase.RUNOFF_VOTING if is_runoff else Phase.VOTING
         self.state.phase = phase
         self.state.banishment_votes = {}
@@ -530,6 +590,31 @@ class GameEngine:
         )
 
     # ------------------------------------------------------------------
+    # Vote summary helpers
+    # ------------------------------------------------------------------
+
+    def _votes_by_team(self, votes: dict[str, str]) -> dict[str, str]:
+        """Map voter/target player IDs to team names."""
+        return {
+            self.state.players[voter].team: self.state.players[target].team
+            for voter, target in votes.items()
+            if voter in self.state.players and target in self.state.players
+        }
+
+    def _player_roster(self) -> list[dict]:
+        """Build a roster of all players with status and role info."""
+        return [
+            {
+                "id": p.id,
+                "team": p.team,
+                "role": p.role.value if p.role else "unknown",
+                "alive": p.alive,
+                "avatar_url": p.avatar_url,
+            }
+            for p in self.state.players.values()
+        ]
+
+    # ------------------------------------------------------------------
     # Banishment reveal
     # ------------------------------------------------------------------
 
@@ -577,6 +662,56 @@ class GameEngine:
             self.narrator.summary.record_vote_result(
                 self.state.round, None, was_wolf=False, had_runoff=False
             )
+
+        # Build vote summary and broadcast to players + spectators
+        final_votes_by_team = self._votes_by_team(self.state.banishment_votes)
+        first_round_by_team = (
+            self._votes_by_team(self._first_round_votes)
+            if self._first_round_votes
+            else None
+        )
+        vote_narration = await self.narrator.narrate_vote_summary(
+            round_num=self.state.round,
+            final_votes=final_votes_by_team,
+            banished_team=banished.team if banished else None,
+            had_runoff=self._had_runoff,
+            first_round_votes=first_round_by_team,
+        )
+
+        # Broadcast vote results to all alive players + the just-banished player
+        vote_result_msg = VoteResultMessage(
+            round=self.state.round,
+            votes=final_votes_by_team,
+            had_runoff=self._had_runoff,
+            first_round_votes=first_round_by_team,
+            banished_team=banished.team if banished else None,
+            banished_role=banished.role.value if banished and banished.role else None,
+            host_narration=vote_narration,
+        )
+        await self.ws.broadcast(self.state.alive_player_ids, vote_result_msg)
+        if banished:
+            await self.ws.send(banished.id, vote_result_msg)
+
+        # Publish vote summary for spectators
+        await self._publish(
+            "vote_summary",
+            {
+                "round": self.state.round,
+                "narration": vote_narration,
+                "had_runoff": self._had_runoff,
+                "first_round_votes": first_round_by_team,
+                "final_votes": final_votes_by_team,
+                "banished": (
+                    {
+                        "team": banished.team,
+                        "role": banished.role.value if banished.role else "unknown",
+                    }
+                    if banished
+                    else None
+                ),
+                "roster": self._player_roster(),
+            },
+        )
 
         await asyncio.sleep(settings.banishment_reveal_pause)
 

@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     reconnect_timeout: int = 10
 
     # Spectator
+    spectator_secret: str = ""  # shared secret for spectator feed; empty = open access
     spectator_wolf_chat_delay: int = 0  # 0 = hidden until game end
 
     # Avatars
@@ -43,10 +44,10 @@ settings = Settings()
 WOLF_SCALING: dict[int, int] = {
     5: 1,
     6: 1,
-    7: 2,
+    7: 1,
     8: 2,
     9: 2,
-    10: 3,
+    10: 2,
 }
 
 

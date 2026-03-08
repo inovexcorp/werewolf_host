@@ -55,7 +55,7 @@ All prefixed with `WW_`:
 - **`spectator.py`** — SSE streaming endpoint backed by Redis pub/sub. Game events are published to `game:{id}:events` channels.
 - **`rate_limiter.py`** — In-memory per-phase rate limiting: max messages, cooldown between messages, message length. Reset each discussion phase.
 - **`redis.py`** — Async Redis connection pool (singleton). Used for team registry, game metadata, pub/sub for spectators, and scoreboard.
-- **`config.py`** — `Settings` (pydantic-settings) with all timing, rate limit, and connection parameters. Also contains `wolves_for_player_count()` scaling table (5-6 players → 1 wolf, 7-8 → 2, 9-10 → 3).
+- **`config.py`** — `Settings` (pydantic-settings) with all timing, rate limit, and connection parameters. Also contains `wolves_for_player_count()` scaling table (5-7 players → 1 wolf, 8-10 → 2, 11+ → 3).
 
 **Models (`src/app/models/`):**
 - **`game.py`** — `Player`, `GameState`, `Role`, `Phase`, `Elimination` enums/models. `GameState` has computed properties for alive players/wolves/villagers and `check_winner()`.

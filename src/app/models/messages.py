@@ -65,6 +65,17 @@ class VoteUpdateMessage(BaseModel):
     time_remaining_seconds: int
 
 
+class VoteResultMessage(BaseModel):
+    type: Literal["vote_result"] = "vote_result"
+    round: int
+    votes: dict[str, str]  # voter_team -> target_team
+    had_runoff: bool = False
+    first_round_votes: dict[str, str] | None = None
+    banished_team: str | None = None
+    banished_role: str | None = None
+    host_narration: str = ""
+
+
 class EliminationMessage(BaseModel):
     type: Literal["elimination"] = "elimination"
     agent_id: str
@@ -94,6 +105,7 @@ HostMessage = Annotated[
     | TypingIndicatorBroadcast
     | WolfChatBroadcast
     | VoteUpdateMessage
+    | VoteResultMessage
     | EliminationMessage
     | GameEndMessage
     | ErrorMessage,

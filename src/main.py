@@ -345,7 +345,12 @@ async def get_game_status(game_id: str) -> GameStatusResponse:
 
 
 @app.get("/api/games/{game_id}/spectate")
-async def spectate_game(game_id: str, request):
+async def spectate_game(game_id: str, request: Request):
+    secret = settings.spectator_secret
+    if secret:
+        auth = request.headers.get("authorization", "")
+        if auth != f"Bearer {secret}":
+            raise HTTPException(403, "Invalid or missing spectator secret")
     if game_id not in _games:
         raise HTTPException(404, "Game not found")
     return spectator_stream(game_id, request)

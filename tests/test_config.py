@@ -21,7 +21,7 @@ class TestSettings:
 class TestWolvesForPlayerCount:
     @pytest.mark.parametrize(
         "players,expected",
-        [(5, 1), (6, 1), (7, 2), (8, 2), (9, 2), (10, 3)],
+        [(5, 1), (6, 1), (7, 1), (8, 2), (9, 2), (10, 2)],
     )
     def test_scaling_table(self, players, expected):
         assert wolves_for_player_count(players) == expected
