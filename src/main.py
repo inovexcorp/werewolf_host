@@ -7,6 +7,7 @@ from pathlib import Path
 
 import websockets
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -85,6 +86,11 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Werewolf Host", version="0.1.0", lifespan=lifespan)
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 app.mount("/static", StaticFiles(directory=_PROJECT_ROOT / "static"), name="static")
+
+
+@app.get("/")
+async def root():
+    return RedirectResponse(url="/docs")
 
 
 # ---------------------------------------------------------------------------
