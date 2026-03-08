@@ -1,0 +1,22 @@
+[project]
+name = "werewolf-host"
+version = "0.1.0"
+description = "AI Werewolf Hackathon Host Agent"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.135",
+    "uvicorn[standard]>=0.41",
+    "redis[hiredis]>=5.2",
+    "websockets>=14.0",
+    "openai>=1.0",
+    "pydantic>=2.12",
+    "pydantic-settings>=2.0",
+    "sse-starlette>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.25",
+    "httpx>=0.28",
+]
