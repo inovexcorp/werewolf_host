@@ -51,12 +51,12 @@ class ConnectionManager:
                     msg = _agent_message_adapter.validate_python(data)
                     await self._message_queue.put((agent_id, msg))
                 except Exception:
-                    logger.warning(
-                        "Invalid message from %s: %s", agent_id, raw[:200]
-                    )
+                    logger.warning("Invalid message from %s: %s", agent_id, raw[:200])
                     await self.send(
                         agent_id,
-                        ErrorMessage(code="INVALID_MESSAGE", message="Malformed message."),
+                        ErrorMessage(
+                            code="INVALID_MESSAGE", message="Malformed message."
+                        ),
                     )
         except websockets.ConnectionClosed:
             logger.info("Agent %s disconnected", agent_id)
@@ -107,9 +107,7 @@ class ConnectionManager:
         msg = TypingIndicatorBroadcast(agent_id=from_id, is_typing=is_typing)
         await self.broadcast(agent_ids, msg)
 
-    async def broadcast_wolf_chat(
-        self, wolf_ids: list[str], from_id: str, text: str
-    ):
+    async def broadcast_wolf_chat(self, wolf_ids: list[str], from_id: str, text: str):
         msg = WolfChatBroadcast(**{"from": from_id, "message": text})
         await self.broadcast(wolf_ids, msg)
 

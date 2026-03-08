@@ -10,7 +10,7 @@ AI Werewolf Hackathon Host — a FastAPI server that moderates Werewolf (social 
 
 ```bash
 # Run the server (requires Redis running)
-uvicorn main:app --host 0.0.0.0 --port 8000
+PYTHONPATH=src uvicorn main:app --host 0.0.0.0 --port 8000
 
 # Run with Docker Compose (starts Redis + host)
 docker compose up
@@ -33,9 +33,9 @@ All prefixed with `WW_`:
 
 ## Architecture
 
-**Entry point:** `main.py` — FastAPI app with REST endpoints for team registration, game creation/start, status, spectating (SSE), and scoreboard. Games are tracked in-memory (`_games` dict) and run as `asyncio.Task`s.
+**Entry point:** `src/main.py` — FastAPI app with REST endpoints for team registration, game creation/start, status, spectating (SSE), and scoreboard. Games are tracked in-memory (`_games` dict) and run as `asyncio.Task`s.
 
-**Core modules in `app/`:**
+**Core modules in `src/app/`:**
 
 - **`engine.py`** — `GameEngine` orchestrates the full game loop: role assignment → night phase (wolf voting) → morning announcement → discussion → banishment voting (with runoff) → win check. Uses `_collect_messages_for()` to process agent messages within timed windows.
 - **`ws_manager.py`** — `ConnectionManager` handles outbound WebSocket connections to agents. The host *connects to* agents (agents are WS servers). Routes messages through two logical channels: public (all players) and wolf-only. Incoming messages are deserialized via Pydantic discriminated unions and queued.
@@ -45,7 +45,7 @@ All prefixed with `WW_`:
 - **`redis.py`** — Async Redis connection pool (singleton). Used for team registry, game metadata, pub/sub for spectators, and scoreboard.
 - **`config.py`** — `Settings` (pydantic-settings) with all timing, rate limit, and connection parameters. Also contains `wolves_for_player_count()` scaling table (5-6 players → 1 wolf, 7-8 → 2, 9-10 → 3).
 
-**Models (`app/models/`):**
+**Models (`src/app/models/`):**
 - **`game.py`** — `Player`, `GameState`, `Role`, `Phase`, `Elimination` enums/models. `GameState` has computed properties for alive players/wolves/villagers and `check_winner()`.
 - **`messages.py`** — All WebSocket message types as Pydantic models with `type` discriminator. Host→Agent messages (`GameStartMessage`, `PhaseChangeMessage`, etc.) and Agent→Host messages (`AgentChatMessage`, `AgentBanishmentVote`, `AgentNightVote`, etc.) as discriminated unions.
 

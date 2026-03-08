@@ -1,14 +1,14 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
 from app.models.game import PlayerInfo, Role
 
-
 # ---------------------------------------------------------------------------
 # Host -> Agent messages
 # ---------------------------------------------------------------------------
+
 
 class GameStartMessage(BaseModel):
     type: Literal["game_start"] = "game_start"
@@ -18,6 +18,7 @@ class GameStartMessage(BaseModel):
     players: list[PlayerInfo]
     private_info: dict = {}
     host_narration: str = ""
+    host_backstory: str = ""
 
 
 class PhaseChangeMessage(BaseModel):
@@ -37,7 +38,7 @@ class ChatBroadcast(BaseModel):
 
     def model_post_init(self, _context):
         if not self.timestamp:
-            self.timestamp = datetime.now(timezone.utc).isoformat()
+            self.timestamp = datetime.now(UTC).isoformat()
 
 
 class TypingIndicatorBroadcast(BaseModel):
@@ -54,7 +55,7 @@ class WolfChatBroadcast(BaseModel):
 
     def model_post_init(self, _context):
         if not self.timestamp:
-            self.timestamp = datetime.now(timezone.utc).isoformat()
+            self.timestamp = datetime.now(UTC).isoformat()
 
 
 class VoteUpdateMessage(BaseModel):
@@ -103,6 +104,7 @@ HostMessage = Annotated[
 # ---------------------------------------------------------------------------
 # Agent -> Host messages
 # ---------------------------------------------------------------------------
+
 
 class AgentChatMessage(BaseModel):
     type: Literal["chat_message"] = "chat_message"

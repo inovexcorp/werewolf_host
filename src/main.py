@@ -3,9 +3,10 @@ import json
 import logging
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-import redis.asyncio as aioredis
-from fastapi import FastAPI, HTTPException
+import websockets
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -25,14 +26,55 @@ _games: dict[str, GameEngine] = {}
 _game_tasks: dict[str, asyncio.Task] = {}
 
 
+def _redact_key(key: str) -> str:
+    if not key:
+        return "(not set)"
+    return f"{key[:4]}...{key[-4:]}" if len(key) > 8 else "****"
+
+
+def _log_settings_summary():
+    logger.info("=== Werewolf Host Configuration ===")
+    logger.info("  Redis URL:       %s", settings.redis_url)
+    logger.info("  Narrator model:  %s", settings.narrator_model)
+    logger.info("  OpenAI base URL: %s", settings.openai_base_url)
+    logger.info("  OpenAI API key:  %s", _redact_key(settings.openai_api_key))
+    logger.info("  Night duration:  %ds", settings.night_duration)
+    logger.info("  Discussion dur:  %ds", settings.discussion_duration)
+    logger.info("  Voting duration: %ds", settings.voting_duration)
+    if not settings.openai_api_key:
+        logger.warning("No OpenAI API key set — narrator features will be disabled")
+    logger.info("===================================")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: ensure avatar directory & default avatar exist
+    # Log configuration summary
+    _log_settings_summary()
+
+    # Ensure avatar directory & default avatar exist
     ensure_avatar_dir()
+
     # Verify Redis connection
-    r = await get_redis()
-    await r.ping()
-    logger.info("Connected to Redis")
+    try:
+        r = await get_redis()
+        await r.ping()
+        logger.info("Connected to Redis")
+    except Exception as exc:
+        logger.critical("Failed to connect to Redis at %s: %s", settings.redis_url, exc)
+        raise RuntimeError(
+            f"Cannot connect to Redis at {settings.redis_url}. "
+            "Is Redis running? Check WW_REDIS_URL."
+        ) from exc
+
+    # Generate host backstory via LLM
+    narrator = Narrator()
+    backstory = await narrator.generate_host_backstory()
+    app.state.host_backstory = backstory
+    if backstory:
+        logger.info("Host backstory: %s", backstory)
+    else:
+        logger.warning("No host backstory generated (narrator may be disabled)")
+
     yield
     # Shutdown
     for task in _game_tasks.values():
@@ -41,12 +83,14 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Werewolf Host", version="0.1.0", lifespan=lifespan)
-app.mount("/static", StaticFiles(directory="static"), name="static")
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+app.mount("/static", StaticFiles(directory=_PROJECT_ROOT / "static"), name="static")
 
 
 # ---------------------------------------------------------------------------
 # Request / response models
 # ---------------------------------------------------------------------------
+
 
 class RegisterRequest(BaseModel):
     team_name: str
@@ -71,6 +115,7 @@ class GameStatusResponse(BaseModel):
 # Team registration
 # ---------------------------------------------------------------------------
 
+
 @app.post("/api/register")
 async def register_team(req: RegisterRequest):
     r = await get_redis()
@@ -81,7 +126,7 @@ async def register_team(req: RegisterRequest):
         try:
             avatar_path = process_avatar(req.avatar, req.team_name)
         except ValueError as e:
-            raise HTTPException(400, str(e))
+            raise HTTPException(400, str(e)) from e
     else:
         avatar_path = default_avatar_path()
 
@@ -123,11 +168,79 @@ async def unregister_team(team_name: str):
 
 
 # ---------------------------------------------------------------------------
+# Health & status checks
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/health")
+async def health_check():
+    redis_ok = True
+    try:
+        r = await get_redis()
+        await r.ping()
+    except Exception:
+        redis_ok = False
+
+    team_count = await r.hlen("teams") if redis_ok else 0
+    active_games = len(_game_tasks)
+
+    return {
+        "status": "ok" if redis_ok else "degraded",
+        "redis": "ok" if redis_ok else "unavailable",
+        "registered_teams": team_count,
+        "active_games": active_games,
+    }
+
+
+@app.get("/api/teams/{team_name}/status")
+async def team_status(team_name: str):
+    r = await get_redis()
+    agent_url = await r.hget("teams", team_name)
+    if agent_url is None:
+        raise HTTPException(404, "Team not found")
+
+    avatars = await r.hgetall("team_avatars")
+    avatar_path = avatars.get(team_name, default_avatar_path())
+
+    return {
+        "registered": True,
+        "team_name": team_name,
+        "agent_url": agent_url,
+        "avatar_url": f"/{avatar_path}",
+    }
+
+
+@app.post("/api/teams/{team_name}/check")
+async def check_team_connectivity(team_name: str):
+    r = await get_redis()
+    agent_url = await r.hget("teams", team_name)
+    if agent_url is None:
+        raise HTTPException(404, "Team not found")
+
+    try:
+        async with websockets.connect(agent_url, open_timeout=5):
+            pass
+        return {
+            "team_name": team_name,
+            "agent_url": agent_url,
+            "reachable": True,
+        }
+    except Exception as e:
+        return {
+            "team_name": team_name,
+            "agent_url": agent_url,
+            "reachable": False,
+            "error": str(e),
+        }
+
+
+# ---------------------------------------------------------------------------
 # Game lifecycle
 # ---------------------------------------------------------------------------
 
+
 @app.post("/api/games")
-async def create_game(req: CreateGameRequest):
+async def create_game(req: CreateGameRequest, request: Request):
     r = await get_redis()
     all_teams = await r.hgetall("teams")
 
@@ -153,23 +266,30 @@ async def create_game(req: CreateGameRequest):
     for team_name, agent_url in selected.items():
         agent_id = f"agent_{team_name.lower().replace(' ', '_')}"
         avatar_path = avatars.get(team_name, default)
-        players.append(Player(
-            id=agent_id, team=team_name, ws_url=agent_url,
-            avatar_url=f"/{avatar_path}",
-        ))
+        players.append(
+            Player(
+                id=agent_id,
+                team=team_name,
+                ws_url=agent_url,
+                avatar_url=f"/{avatar_path}",
+            )
+        )
 
-    narrator = Narrator()
-    engine = GameEngine(game_id, players, narrator)
+    backstory = getattr(request.app.state, "host_backstory", "")
+    narrator = Narrator(host_backstory=backstory)
+    engine = GameEngine(game_id, players, narrator, host_backstory=backstory)
     _games[game_id] = engine
 
     # Store game metadata in Redis
     await r.set(
         f"game:{game_id}:meta",
-        json.dumps({
-            "game_id": game_id,
-            "teams": list(selected.keys()),
-            "status": "created",
-        }),
+        json.dumps(
+            {
+                "game_id": game_id,
+                "teams": list(selected.keys()),
+                "status": "created",
+            }
+        ),
     )
 
     return {"game_id": game_id, "players": len(players), "status": "created"}
@@ -229,12 +349,11 @@ async def spectate_game(game_id: str, request):
 # Scoreboard
 # ---------------------------------------------------------------------------
 
+
 @app.get("/api/scoreboard")
 async def get_scoreboard():
     r = await get_redis()
     scores = await r.zrevrange("scoreboard", 0, -1, withscores=True)
     return {
-        "standings": [
-            {"team": team, "score": int(score)} for team, score in scores
-        ]
+        "standings": [{"team": team, "score": int(score)} for team, score in scores]
     }

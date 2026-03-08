@@ -28,21 +28,22 @@ def process_avatar(base64_data: str, team_name: str) -> str:
     """Validate, resize, and save an avatar image. Returns the relative file path."""
     try:
         raw = base64.b64decode(base64_data, validate=True)
-    except Exception:
-        raise ValueError("Invalid base64 data")
+    except Exception as exc:
+        raise ValueError("Invalid base64 data") from exc
 
     if len(raw) > settings.avatar_max_upload_bytes:
-        raise ValueError(
-            f"Avatar too large: {len(raw)} bytes (max {settings.avatar_max_upload_bytes})"
-        )
+        max_bytes = settings.avatar_max_upload_bytes
+        raise ValueError(f"Avatar too large: {len(raw)} bytes (max {max_bytes})")
 
     try:
         img = Image.open(io.BytesIO(raw))
-    except Exception:
-        raise ValueError("Could not decode image")
+    except Exception as exc:
+        raise ValueError("Could not decode image") from exc
 
     if img.format not in ALLOWED_FORMATS:
-        raise ValueError(f"Unsupported image format: {img.format}. Allowed: {ALLOWED_FORMATS}")
+        raise ValueError(
+            f"Unsupported image format: {img.format}. Allowed: {ALLOWED_FORMATS}"
+        )
 
     max_px = settings.avatar_max_size_px
     img.thumbnail((max_px, max_px), Image.LANCZOS)

@@ -35,14 +35,29 @@ logger = logging.getLogger(__name__)
 
 
 class GameEngine:
-    def __init__(self, game_id: str, players: list[Player], narrator: Narrator):
+    def __init__(
+        self,
+        game_id: str,
+        players: list[Player],
+        narrator: Narrator,
+        host_backstory: str = "",
+    ):
         self.state = GameState(game_id=game_id)
         self.ws = ConnectionManager()
         self.narrator = narrator
+        self.host_backstory = host_backstory
         self._phase_task: asyncio.Task | None = None
+        self._had_runoff: bool = False
+        self._background_tasks: set[asyncio.Task] = set()
 
         for p in players:
             self.state.players[p.id] = p
+
+    def _fire_and_forget(self, coro) -> None:
+        """Create a background task and prevent it from being garbage collected."""
+        task = asyncio.create_task(coro)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
 
     # ------------------------------------------------------------------
     # Public API
@@ -104,7 +119,9 @@ class GameEngine:
             [p.info for p in self.state.players.values()]
         )
         all_players_info = [p.info for p in self.state.players.values()]
-        wolf_ids = [p.id for p in self.state.players.values() if p.role == Role.WEREWOLF]
+        wolf_ids = [
+            p.id for p in self.state.players.values() if p.role == Role.WEREWOLF
+        ]
 
         for p in self.state.players.values():
             private_info = {}
@@ -118,19 +135,27 @@ class GameEngine:
                 players=all_players_info,
                 private_info=private_info,
                 host_narration=narration,
+                host_backstory=self.host_backstory,
             )
             await self.ws.send(p.id, msg)
 
         for p in self.state.players.values():
             self.ws.start_listening(p.id)
 
-        await self._publish("game_start", {
-            "narration": narration,
-            "players": [
-                {"id": p.id, "team": p.team, "avatar_url": p.avatar_url}
-                for p in self.state.players.values()
-            ],
-        })
+        self.narrator.summary.record_game_start(
+            [p.team for p in self.state.players.values()]
+        )
+
+        await self._publish(
+            "game_start",
+            {
+                "narration": narration,
+                "players": [
+                    {"id": p.id, "team": p.team, "avatar_url": p.avatar_url}
+                    for p in self.state.players.values()
+                ],
+            },
+        )
 
     # ------------------------------------------------------------------
     # Night phase
@@ -150,7 +175,9 @@ class GameEngine:
             host_narration=narration,
         )
         await self.ws.broadcast(self.state.alive_player_ids, phase_msg)
-        await self._publish("phase_change", {"phase": "night", "round": self.state.round})
+        await self._publish(
+            "phase_change", {"phase": "night", "round": self.state.round}
+        )
 
         await self._collect_messages_for(
             settings.night_duration,
@@ -164,49 +191,71 @@ class GameEngine:
 
         if isinstance(msg, AgentNightVote):
             if player.role != Role.WEREWOLF:
-                _ = asyncio.create_task(self.ws.send(
-                    agent_id,
-                    ErrorMessage(code="NOT_WEREWOLF", message="Only werewolves can vote at night."),
-                ))
+                self._fire_and_forget(
+                    self.ws.send(
+                        agent_id,
+                        ErrorMessage(
+                            code="NOT_WEREWOLF",
+                            message="Only werewolves can vote at night.",
+                        ),
+                    )
+                )
                 return False
             if msg.target not in self.state.alive_player_ids or msg.target == agent_id:
-                _ = asyncio.create_task(self.ws.send(
-                    agent_id,
-                    ErrorMessage(code="INVALID_TARGET", message="Invalid target."),
-                ))
+                self._fire_and_forget(
+                    self.ws.send(
+                        agent_id,
+                        ErrorMessage(code="INVALID_TARGET", message="Invalid target."),
+                    )
+                )
                 return False
             # Wolves shouldn't target fellow wolves
             target = self.state.players.get(msg.target)
             if target and target.role == Role.WEREWOLF:
-                _ = asyncio.create_task(self.ws.send(
-                    agent_id,
-                    ErrorMessage(code="INVALID_TARGET", message="Cannot target a fellow werewolf."),
-                ))
+                self._fire_and_forget(
+                    self.ws.send(
+                        agent_id,
+                        ErrorMessage(
+                            code="INVALID_TARGET",
+                            message="Cannot target a fellow werewolf.",
+                        ),
+                    )
+                )
                 return False
             self.state.night_votes[agent_id] = msg.target
             return True
 
         if isinstance(msg, AgentWolfChat):
             if player.role != Role.WEREWOLF:
-                _ = asyncio.create_task(self.ws.send(
-                    agent_id,
-                    ErrorMessage(code="NOT_WEREWOLF", message="Only werewolves can use wolf chat."),
-                ))
+                self._fire_and_forget(
+                    self.ws.send(
+                        agent_id,
+                        ErrorMessage(
+                            code="NOT_WEREWOLF",
+                            message="Only werewolves can use wolf chat.",
+                        ),
+                    )
+                )
                 return False
             wolf_ids = [p.id for p in self.state.alive_wolves]
-            _ = asyncio.create_task(
+            self._fire_and_forget(
                 self.ws.broadcast_wolf_chat(wolf_ids, agent_id, msg.message)
             )
-            self.state.chat_log.append({
-                "channel": "wolf", "from": agent_id, "message": msg.message,
-                "round": self.state.round, "phase": "night",
-            })
+            self.state.chat_log.append(
+                {
+                    "channel": "wolf",
+                    "from": agent_id,
+                    "message": msg.message,
+                    "round": self.state.round,
+                    "phase": "night",
+                }
+            )
             return True
 
         if isinstance(msg, AgentTypingIndicator):
             if player.role == Role.WEREWOLF:
                 wolf_ids = [p.id for p in self.state.alive_wolves if p.id != agent_id]
-                _ = asyncio.create_task(
+                self._fire_and_forget(
                     self.ws.broadcast_typing(wolf_ids, agent_id, msg.is_typing)
                 )
             return True
@@ -255,10 +304,18 @@ class GameEngine:
             await self.ws.broadcast(self.state.alive_player_ids, elim_msg)
             # Also send to the victim so they know
             await self.ws.send(victim.id, elim_msg)
-            await self._publish("elimination", {
-                "agent_id": victim.id, "role": victim.role,
-                "method": "murder", "narration": narration,
-            })
+            await self._publish(
+                "elimination",
+                {
+                    "agent_id": victim.id,
+                    "role": victim.role,
+                    "method": "murder",
+                    "narration": narration,
+                },
+            )
+            self.narrator.summary.record_night_result(self.state.round, victim.team)
+        else:
+            self.narrator.summary.record_night_result(self.state.round, None)
 
         await asyncio.sleep(settings.morning_announcement_pause)
 
@@ -281,11 +338,28 @@ class GameEngine:
             host_narration=narration,
         )
         await self.ws.broadcast(self.state.alive_player_ids, phase_msg)
-        await self._publish("phase_change", {"phase": "discussion", "round": self.state.round})
+        await self._publish(
+            "phase_change", {"phase": "discussion", "round": self.state.round}
+        )
 
         await self._collect_messages_for(
             settings.discussion_duration,
             allowed_handler=self._handle_discussion_message,
+        )
+
+        # Build discussion highlights for narrator context (public messages only)
+        round_chats = [
+            {
+                "team": self.state.players[entry["from"]].team,
+                "message": entry["message"],
+            }
+            for entry in self.state.chat_log
+            if entry.get("round") == self.state.round
+            and entry.get("phase") == "discussion"
+            and entry.get("channel") == "public"
+        ]
+        self.narrator.summary.record_discussion_highlights(
+            self.state.round, round_chats
         )
 
     def _handle_discussion_message(self, agent_id: str, msg) -> bool:
@@ -298,33 +372,58 @@ class GameEngine:
                 self.state.game_id, agent_id, msg.message
             )
             if error_code:
-                _ = asyncio.create_task(self.ws.send(
-                    agent_id,
-                    ErrorMessage(code=error_code, message=f"Chat rejected: {error_code}"),
-                ))
+                self._fire_and_forget(
+                    self.ws.send(
+                        agent_id,
+                        ErrorMessage(
+                            code=error_code, message=f"Chat rejected: {error_code}"
+                        ),
+                    )
+                )
                 return False
 
-            _ = asyncio.create_task(
-                self.ws.broadcast_chat(self.state.alive_player_ids, agent_id, msg.message)
+            self._fire_and_forget(
+                self.ws.broadcast_chat(
+                    self.state.alive_player_ids, agent_id, msg.message
+                )
             )
-            self.state.chat_log.append({
-                "channel": "public", "from": agent_id, "message": msg.message,
-                "round": self.state.round, "phase": "discussion",
-            })
-            _ = asyncio.create_task(self._publish("chat_message", {
-                "from": agent_id, "message": msg.message,
-            }))
+            self.state.chat_log.append(
+                {
+                    "channel": "public",
+                    "from": agent_id,
+                    "message": msg.message,
+                    "round": self.state.round,
+                    "phase": "discussion",
+                }
+            )
+            self._fire_and_forget(
+                self._publish(
+                    "chat_message",
+                    {
+                        "from": agent_id,
+                        "message": msg.message,
+                    },
+                )
+            )
             return True
 
         if isinstance(msg, AgentTypingIndicator):
-            _ = asyncio.create_task(self.ws.broadcast_typing(
-                [p for p in self.state.alive_player_ids if p != agent_id],
-                agent_id,
-                msg.is_typing,
-            ))
-            _ = asyncio.create_task(self._publish("typing_indicator", {
-                "agent_id": agent_id, "is_typing": msg.is_typing,
-            }))
+            self._fire_and_forget(
+                self.ws.broadcast_typing(
+                    [p for p in self.state.alive_player_ids if p != agent_id],
+                    agent_id,
+                    msg.is_typing,
+                )
+            )
+            self._fire_and_forget(
+                self._publish(
+                    "typing_indicator",
+                    {
+                        "agent_id": agent_id,
+                        "is_typing": msg.is_typing,
+                    },
+                )
+            )
             return True
 
         return False
@@ -334,9 +433,8 @@ class GameEngine:
     # ------------------------------------------------------------------
 
     async def _voting_phase(self) -> Player | None:
-        return await self._run_vote_round(
-            settings.voting_duration, is_runoff=False
-        )
+        self._had_runoff = False
+        return await self._run_vote_round(settings.voting_duration, is_runoff=False)
 
     async def _run_vote_round(
         self, duration: int, is_runoff: bool, candidates: list[str] | None = None
@@ -350,10 +448,14 @@ class GameEngine:
             round=self.state.round,
             time_remaining_seconds=duration,
             alive_players=self.state.alive_player_ids,
-            host_narration="The village must vote." if not is_runoff else "A runoff vote begins!",
+            host_narration="The village must vote."
+            if not is_runoff
+            else "A runoff vote begins!",
         )
         await self.ws.broadcast(self.state.alive_player_ids, phase_msg)
-        await self._publish("phase_change", {"phase": str(phase), "round": self.state.round})
+        await self._publish(
+            "phase_change", {"phase": str(phase), "round": self.state.round}
+        )
 
         total_voters = len(self.state.alive_player_ids)
 
@@ -368,10 +470,14 @@ class GameEngine:
                     p for p in self.state.alive_player_ids if p != agent_id
                 ]
                 if target not in valid_targets:
-                    _ = asyncio.create_task(self.ws.send(
-                        agent_id,
-                        ErrorMessage(code="INVALID_TARGET", message="Invalid vote target."),
-                    ))
+                    self._fire_and_forget(
+                        self.ws.send(
+                            agent_id,
+                            ErrorMessage(
+                                code="INVALID_TARGET", message="Invalid vote target."
+                            ),
+                        )
+                    )
                     return False
                 self.state.banishment_votes[agent_id] = target
 
@@ -380,7 +486,7 @@ class GameEngine:
                     votes_total=total_voters,
                     time_remaining_seconds=0,  # approximate
                 )
-                _ = asyncio.create_task(
+                self._fire_and_forget(
                     self.ws.broadcast(self.state.alive_player_ids, vote_update)
                 )
                 return True
@@ -418,6 +524,7 @@ class GameEngine:
             return self.state.players.get(random.choice(tied))
 
         # First tie → runoff
+        self._had_runoff = True
         return await self._run_vote_round(
             settings.runoff_voting_duration, is_runoff=True, candidates=tied
         )
@@ -451,10 +558,25 @@ class GameEngine:
             )
             await self.ws.broadcast(self.state.alive_player_ids, elim_msg)
             await self.ws.send(banished.id, elim_msg)
-            await self._publish("elimination", {
-                "agent_id": banished.id, "role": banished.role,
-                "method": "banishment", "narration": narration,
-            })
+            await self._publish(
+                "elimination",
+                {
+                    "agent_id": banished.id,
+                    "role": banished.role,
+                    "method": "banishment",
+                    "narration": narration,
+                },
+            )
+            self.narrator.summary.record_vote_result(
+                self.state.round,
+                banished.team,
+                was_wolf=banished.role == Role.WEREWOLF,
+                had_runoff=self._had_runoff,
+            )
+        else:
+            self.narrator.summary.record_vote_result(
+                self.state.round, None, was_wolf=False, had_runoff=False
+            )
 
         await asyncio.sleep(settings.banishment_reveal_pause)
 
@@ -471,10 +593,9 @@ class GameEngine:
         return False
 
     async def _send_game_end(self):
+        self.narrator.summary.record_game_end(self.state.winner)
         final_roles = {p.id: p.role for p in self.state.players.values()}
-        narration = await self.narrator.narrate_game_end(
-            self.state.winner, final_roles
-        )
+        narration = await self.narrator.narrate_game_end(self.state.winner, final_roles)
         msg = GameEndMessage(
             winner=self.state.winner,
             final_roles=final_roles,
@@ -483,12 +604,15 @@ class GameEngine:
         # Send to ALL players (alive and dead)
         all_ids = list(self.state.players.keys())
         await self.ws.broadcast(all_ids, msg)
-        await self._publish("game_end", {
-            "winner": self.state.winner,
-            "final_roles": final_roles,
-            "narration": narration,
-            "chat_log": self.state.chat_log,
-        })
+        await self._publish(
+            "game_end",
+            {
+                "winner": self.state.winner,
+                "final_roles": final_roles,
+                "narration": narration,
+                "chat_log": self.state.chat_log,
+            },
+        )
 
     # ------------------------------------------------------------------
     # Message collection loop
@@ -505,7 +629,7 @@ class GameEngine:
             try:
                 agent_id, msg = await self.ws.get_next_message(timeout=remaining)
                 allowed_handler(agent_id, msg)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 break
             except Exception:
                 logger.exception("Error processing message")

@@ -1,8 +1,6 @@
 import asyncio
-import json
 import logging
 
-import redis.asyncio as aioredis
 from starlette.requests import Request
 from starlette.responses import StreamingResponse
 
