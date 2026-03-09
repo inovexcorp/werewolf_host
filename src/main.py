@@ -122,7 +122,7 @@ class GameStatusResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-@app.post("/api/register")
+@app.post("/register")
 async def register_team(req: RegisterRequest):
     r = await get_redis()
     await r.hset("teams", req.team_name, req.agent_url)
@@ -146,7 +146,7 @@ async def register_team(req: RegisterRequest):
     }
 
 
-@app.get("/api/teams")
+@app.get("/teams")
 async def list_teams():
     r = await get_redis()
     teams = await r.hgetall("teams")
@@ -164,7 +164,7 @@ async def list_teams():
     }
 
 
-@app.delete("/api/teams/{team_name}")
+@app.delete("/teams/{team_name}")
 async def unregister_team(team_name: str):
     r = await get_redis()
     removed = await r.hdel("teams", team_name)
@@ -178,7 +178,7 @@ async def unregister_team(team_name: str):
 # ---------------------------------------------------------------------------
 
 
-@app.get("/api/health")
+@app.get("/health")
 async def health_check():
     redis_ok = True
     try:
@@ -198,7 +198,7 @@ async def health_check():
     }
 
 
-@app.get("/api/teams/{team_name}/status")
+@app.get("/teams/{team_name}/status")
 async def team_status(team_name: str):
     r = await get_redis()
     agent_url = await r.hget("teams", team_name)
@@ -216,7 +216,7 @@ async def team_status(team_name: str):
     }
 
 
-@app.post("/api/teams/{team_name}/check")
+@app.post("/teams/{team_name}/check")
 async def check_team_connectivity(team_name: str):
     r = await get_redis()
     agent_url = await r.hget("teams", team_name)
@@ -245,7 +245,7 @@ async def check_team_connectivity(team_name: str):
 # ---------------------------------------------------------------------------
 
 
-@app.post("/api/games")
+@app.post("/games")
 async def create_game(req: CreateGameRequest, request: Request):
     r = await get_redis()
     all_teams = await r.hgetall("teams")
@@ -300,7 +300,7 @@ async def create_game(req: CreateGameRequest, request: Request):
     return {"game_id": game_id, "players": len(players), "status": "created"}
 
 
-@app.post("/api/games/{game_id}/start")
+@app.post("/games/{game_id}/start")
 async def start_game(game_id: str):
     engine = _games.get(game_id)
     if not engine:
@@ -329,7 +329,7 @@ async def start_game(game_id: str):
     return {"game_id": game_id, "status": "started"}
 
 
-@app.get("/api/games/{game_id}")
+@app.get("/games/{game_id}")
 async def get_game_status(game_id: str) -> GameStatusResponse:
     engine = _games.get(game_id)
     if not engine:
@@ -343,7 +343,7 @@ async def get_game_status(game_id: str) -> GameStatusResponse:
     )
 
 
-@app.get("/api/games/{game_id}/spectate")
+@app.get("/games/{game_id}/spectate")
 async def spectate_game(game_id: str, request: Request):
     secret = settings.spectator_secret
     if secret:
@@ -360,7 +360,7 @@ async def spectate_game(game_id: str, request: Request):
 # ---------------------------------------------------------------------------
 
 
-@app.get("/api/scoreboard")
+@app.get("/scoreboard")
 async def get_scoreboard():
     r = await get_redis()
     scores = await r.zrevrange("scoreboard", 0, -1, withscores=True)

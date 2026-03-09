@@ -2,7 +2,7 @@ class TestRegister:
     async def test_register_team(self, async_client):
         async with async_client as c:
             resp = await c.post(
-                "/api/register",
+                "/register",
                 json={"team_name": "Alpha", "agent_url": "ws://localhost:8080/ws"},
             )
         assert resp.status_code == 200
@@ -15,7 +15,7 @@ class TestTeams:
     async def test_list_teams(self, async_client, fake_redis):
         await fake_redis.hset("teams", "Alpha", "ws://localhost:8080/ws")
         async with async_client as c:
-            resp = await c.get("/api/teams")
+            resp = await c.get("/teams")
         assert resp.status_code == 200
         teams = resp.json()["teams"]
         assert len(teams) == 1
@@ -24,17 +24,17 @@ class TestTeams:
     async def test_delete_team(self, async_client, fake_redis):
         await fake_redis.hset("teams", "Alpha", "ws://localhost:8080/ws")
         async with async_client as c:
-            resp = await c.delete("/api/teams/Alpha")
+            resp = await c.delete("/teams/Alpha")
             assert resp.status_code == 200
             # Second delete should 404
-            resp2 = await c.delete("/api/teams/Alpha")
+            resp2 = await c.delete("/teams/Alpha")
             assert resp2.status_code == 404
 
 
 class TestHealth:
     async def test_health_ok(self, async_client):
         async with async_client as c:
-            resp = await c.get("/api/health")
+            resp = await c.get("/health")
         assert resp.status_code == 200
         assert resp.json()["status"] == "ok"
 
@@ -47,7 +47,7 @@ class TestGames:
     async def test_create_game(self, async_client, fake_redis):
         await self._register_teams(fake_redis, 5)
         async with async_client as c:
-            resp = await c.post("/api/games", json={})
+            resp = await c.post("/games", json={})
         assert resp.status_code == 200
         data = resp.json()
         assert data["players"] == 5
@@ -56,36 +56,36 @@ class TestGames:
     async def test_create_game_too_few_teams(self, async_client, fake_redis):
         await self._register_teams(fake_redis, 3)
         async with async_client as c:
-            resp = await c.post("/api/games", json={})
+            resp = await c.post("/games", json={})
         assert resp.status_code == 400
 
     async def test_get_game_status(self, async_client, fake_redis):
         await self._register_teams(fake_redis, 5)
         async with async_client as c:
-            create_resp = await c.post("/api/games", json={})
+            create_resp = await c.post("/games", json={})
             game_id = create_resp.json()["game_id"]
-            resp = await c.get(f"/api/games/{game_id}")
+            resp = await c.get(f"/games/{game_id}")
         assert resp.status_code == 200
         assert resp.json()["game_id"] == game_id
         assert resp.json()["phase"] == "lobby"
 
     async def test_get_game_not_found(self, async_client):
         async with async_client as c:
-            resp = await c.get("/api/games/nonexistent")
+            resp = await c.get("/games/nonexistent")
         assert resp.status_code == 404
 
 
 class TestScoreboard:
     async def test_empty_scoreboard(self, async_client):
         async with async_client as c:
-            resp = await c.get("/api/scoreboard")
+            resp = await c.get("/scoreboard")
         assert resp.status_code == 200
         assert resp.json()["standings"] == []
 
     async def test_scoreboard_with_data(self, async_client, fake_redis):
         await fake_redis.zadd("scoreboard", {"Alpha": 10, "Beta": 5})
         async with async_client as c:
-            resp = await c.get("/api/scoreboard")
+            resp = await c.get("/scoreboard")
         standings = resp.json()["standings"]
         assert len(standings) == 2
         assert standings[0]["team"] == "Alpha"
