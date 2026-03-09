@@ -30,6 +30,7 @@ from app.models.messages import (
 from app.narrator import Narrator
 from app.rate_limiter import rate_limiter
 from app.redis import publish_event
+from app.scoring import award_points
 from app.ws_manager import ConnectionManager
 
 logger = logging.getLogger(__name__)
@@ -99,6 +100,7 @@ class GameEngine:
                 self._check_win()
 
             await self._send_game_end()
+            await award_points(self.state)
         finally:
             await self.ws.disconnect_all()
 
@@ -147,7 +149,7 @@ class GameEngine:
             self.ws.start_listening(p.id)
 
         self.narrator.summary.record_game_start(
-            [p.team for p in self.state.players.values()]
+            [p.id for p in self.state.players.values()]
         )
 
         await self._publish(
@@ -329,7 +331,7 @@ class GameEngine:
             )
             self.state.eliminations.append(elim)
 
-            narration = await self.narrator.narrate_murder(victim.team, victim.role)
+            narration = await self.narrator.narrate_murder(victim.id, victim.role)
             elim_msg = EliminationMessage(
                 agent_id=victim.id,
                 role=victim.role,
@@ -349,7 +351,7 @@ class GameEngine:
                     "narration": narration,
                 },
             )
-            self.narrator.summary.record_night_result(self.state.round, victim.team)
+            self.narrator.summary.record_night_result(self.state.round, victim.id)
         else:
             self.narrator.summary.record_night_result(self.state.round, None)
 
@@ -406,7 +408,7 @@ class GameEngine:
         # Build discussion highlights for narrator context (public messages only)
         round_chats = [
             {
-                "team": self.state.players[entry["from"]].team,
+                "team": self.state.players[entry["from"]].id,
                 "message": entry["message"],
             }
             for entry in self.state.chat_log
@@ -593,14 +595,6 @@ class GameEngine:
     # Vote summary helpers
     # ------------------------------------------------------------------
 
-    def _votes_by_team(self, votes: dict[str, str]) -> dict[str, str]:
-        """Map voter/target player IDs to team names."""
-        return {
-            self.state.players[voter].team: self.state.players[target].team
-            for voter, target in votes.items()
-            if voter in self.state.players and target in self.state.players
-        }
-
     def _player_roster(self) -> list[dict]:
         """Build a roster of all players with status and role info."""
         return [
@@ -632,7 +626,7 @@ class GameEngine:
             self.state.eliminations.append(elim)
 
             narration = await self.narrator.narrate_banishment(
-                banished.team, banished.role
+                banished.id, banished.role
             )
             elim_msg = EliminationMessage(
                 agent_id=banished.id,
@@ -654,7 +648,7 @@ class GameEngine:
             )
             self.narrator.summary.record_vote_result(
                 self.state.round,
-                banished.team,
+                banished.id,
                 was_wolf=banished.role == Role.WEREWOLF,
                 had_runoff=self._had_runoff,
             )
@@ -664,27 +658,25 @@ class GameEngine:
             )
 
         # Build vote summary and broadcast to players + spectators
-        final_votes_by_team = self._votes_by_team(self.state.banishment_votes)
-        first_round_by_team = (
-            self._votes_by_team(self._first_round_votes)
-            if self._first_round_votes
-            else None
-        )
         vote_narration = await self.narrator.narrate_vote_summary(
             round_num=self.state.round,
-            final_votes=final_votes_by_team,
-            banished_team=banished.team if banished else None,
+            final_votes=self.state.banishment_votes,
+            banished_team=banished.id if banished else None,
             had_runoff=self._had_runoff,
-            first_round_votes=first_round_by_team,
+            first_round_votes=(
+                self._first_round_votes if self._first_round_votes else None
+            ),
         )
+
+        first_round = self._first_round_votes if self._first_round_votes else None
 
         # Broadcast vote results to all alive players + the just-banished player
         vote_result_msg = VoteResultMessage(
             round=self.state.round,
-            votes=final_votes_by_team,
+            votes=self.state.banishment_votes,
             had_runoff=self._had_runoff,
-            first_round_votes=first_round_by_team,
-            banished_team=banished.team if banished else None,
+            first_round_votes=first_round,
+            banished_team=banished.id if banished else None,
             banished_role=banished.role.value if banished and banished.role else None,
             host_narration=vote_narration,
         )
@@ -699,11 +691,11 @@ class GameEngine:
                 "round": self.state.round,
                 "narration": vote_narration,
                 "had_runoff": self._had_runoff,
-                "first_round_votes": first_round_by_team,
-                "final_votes": final_votes_by_team,
+                "first_round_votes": first_round,
+                "final_votes": self.state.banishment_votes,
                 "banished": (
                     {
-                        "team": banished.team,
+                        "team": banished.id,
                         "role": banished.role.value if banished.role else "unknown",
                     }
                     if banished

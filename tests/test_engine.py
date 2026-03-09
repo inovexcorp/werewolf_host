@@ -50,17 +50,17 @@ class TestAssignRoles:
 class TestResolveNightVotes:
     def test_unanimous_vote(self):
         engine = _make_engine(player_count=6, wolf_count=1)
-        engine.state.night_votes = {"agent_0": "agent_3"}
+        engine.state.night_votes = {"Team0": "Team3"}
         victim = engine._resolve_night_votes()
         assert victim is not None
-        assert victim.id == "agent_3"
+        assert victim.id == "Team3"
 
     def test_split_vote_picks_from_top(self):
         engine = _make_engine(player_count=8, wolf_count=2)
-        engine.state.night_votes = {"agent_0": "agent_3", "agent_1": "agent_4"}
+        engine.state.night_votes = {"Team0": "Team3", "Team1": "Team4"}
         victim = engine._resolve_night_votes()
         assert victim is not None
-        assert victim.id in ("agent_3", "agent_4")
+        assert victim.id in ("Team3", "Team4")
 
     def test_no_votes_random_villager(self):
         engine = _make_engine(player_count=6, wolf_count=1)
@@ -73,7 +73,7 @@ class TestResolveNightVotes:
 class TestCheckWin:
     def test_villager_win(self):
         engine = _make_engine(player_count=6, wolf_count=1)
-        engine.state.players["agent_0"].alive = False  # kill the wolf
+        engine.state.players["Team0"].alive = False  # kill the wolf
         assert engine._check_win() is True
         assert engine.state.winner == "villagers"
         assert engine.state.phase == Phase.GAME_OVER
@@ -81,7 +81,7 @@ class TestCheckWin:
     def test_werewolf_win(self):
         engine = _make_engine(player_count=6, wolf_count=1)
         for i in range(1, 5):
-            engine.state.players[f"agent_{i}"].alive = False
+            engine.state.players[f"Team{i}"].alive = False
         assert engine._check_win() is True
         assert engine.state.winner == "werewolves"
 
@@ -95,21 +95,21 @@ class TestResolveBanishmentVotes:
     async def test_clear_winner(self):
         engine = _make_engine(player_count=6, wolf_count=1)
         engine.state.banishment_votes = {
-            "agent_0": "agent_3",
-            "agent_1": "agent_3",
-            "agent_2": "agent_4",
+            "Team0": "Team3",
+            "Team1": "Team3",
+            "Team2": "Team4",
         }
         result = await engine._resolve_banishment_votes(
             is_runoff=False, candidates=None
         )
         assert result is not None
-        assert result.id == "agent_3"
+        assert result.id == "Team3"
 
     async def test_tie_triggers_runoff(self):
         engine = _make_engine(player_count=6, wolf_count=1)
         engine.state.banishment_votes = {
-            "agent_0": "agent_3",
-            "agent_1": "agent_4",
+            "Team0": "Team3",
+            "Team1": "Team4",
         }
         # The runoff will call _run_vote_round, which calls _collect_messages_for.
         # Mock it to just resolve immediately.
@@ -128,14 +128,14 @@ class TestResolveBanishmentVotes:
     async def test_runoff_tie_random(self):
         engine = _make_engine(player_count=6, wolf_count=1)
         engine.state.banishment_votes = {
-            "agent_0": "agent_3",
-            "agent_1": "agent_4",
+            "Team0": "Team3",
+            "Team1": "Team4",
         }
         result = await engine._resolve_banishment_votes(
-            is_runoff=True, candidates=["agent_3", "agent_4"]
+            is_runoff=True, candidates=["Team3", "Team4"]
         )
         assert result is not None
-        assert result.id in ("agent_3", "agent_4")
+        assert result.id in ("Team3", "Team4")
 
     async def test_empty_votes(self):
         engine = _make_engine(player_count=6, wolf_count=1)

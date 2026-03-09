@@ -4,11 +4,11 @@ from app.models.game import GameState, Phase, Player, Role
 def make_players(count: int = 6, wolves: int = 1) -> dict[str, Player]:
     players = {}
     for i in range(count):
-        pid = f"agent_{i}"
+        pid = f"Team{i}"
         role = Role.WEREWOLF if i < wolves else Role.VILLAGER
         players[pid] = Player(
             id=pid,
-            team=f"Team{i}",
+            team=pid,
             role=role,
             ws_url=f"ws://localhost:808{i}/ws",
         )

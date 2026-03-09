@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     spectator_secret: str = ""  # shared secret for spectator feed; empty = open access
     spectator_wolf_chat_delay: int = 0  # 0 = hidden until game end
 
+    # Scoring
+    scoring_wolf_win_points: int = 3  # points per alive wolf on wolf win
+    scoring_villager_win_points: int = 1  # per alive villager (x count)
+
     # Avatars
     avatar_max_size_px: int = 512
     avatar_max_upload_bytes: int = 2_097_152  # 2 MB

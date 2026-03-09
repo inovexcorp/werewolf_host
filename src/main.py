@@ -126,7 +126,7 @@ class GameStatusResponse(BaseModel):
 async def register_team(req: RegisterRequest):
     r = await get_redis()
     await r.hset("teams", req.team_name, req.agent_url)
-    agent_id = f"agent_{req.team_name.lower().replace(' ', '_')}"
+    agent_id = req.team_name
 
     if req.avatar:
         try:
@@ -270,11 +270,10 @@ async def create_game(req: CreateGameRequest, request: Request):
     game_id = f"game_{uuid.uuid4().hex[:8]}"
     players = []
     for team_name, agent_url in selected.items():
-        agent_id = f"agent_{team_name.lower().replace(' ', '_')}"
         avatar_path = avatars.get(team_name, default)
         players.append(
             Player(
-                id=agent_id,
+                id=team_name,
                 team=team_name,
                 ws_url=agent_url,
                 avatar_url=f"/{avatar_path}",
