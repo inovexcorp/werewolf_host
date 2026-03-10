@@ -4,9 +4,10 @@ import logging
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Annotated
 
 import websockets
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -329,6 +330,27 @@ async def start_game(game_id: str):
     return {"game_id": game_id, "status": "started"}
 
 
+@app.get("/games")
+async def list_games():
+    games = []
+    for game_id, engine in _games.items():
+        s = engine.state
+        games.append(
+            {
+                "game_id": s.game_id,
+                "phase": s.phase,
+                "round": s.round,
+                "players": len(s.players),
+                "alive_players": len(s.alive_player_ids),
+                "winner": s.winner,
+                "active": game_id in _game_tasks,
+            }
+        )
+    # Active games first, then by game_id
+    games.sort(key=lambda g: (not g["active"], g["game_id"]))
+    return {"games": games}
+
+
 @app.get("/games/{game_id}")
 async def get_game_status(game_id: str) -> GameStatusResponse:
     engine = _games.get(game_id)
@@ -343,13 +365,43 @@ async def get_game_status(game_id: str) -> GameStatusResponse:
     )
 
 
-@app.get("/games/{game_id}/spectate")
-async def spectate_game(game_id: str, request: Request):
+def _require_spectator_secret(request: Request) -> None:
     secret = settings.spectator_secret
     if secret:
         auth = request.headers.get("authorization", "")
         if auth != f"Bearer {secret}":
             raise HTTPException(403, "Invalid or missing spectator secret")
+
+
+@app.get("/games/{game_id}/players")
+async def get_game_players(
+    game_id: str,
+    _: Annotated[None, Depends(_require_spectator_secret)],
+):
+    engine = _games.get(game_id)
+    if not engine:
+        raise HTTPException(404, "Game not found")
+    return {
+        "game_id": game_id,
+        "players": [
+            {
+                "id": p.id,
+                "team": p.team,
+                "role": p.role,
+                "avatar_url": p.avatar_url,
+                "alive": p.alive,
+            }
+            for p in engine.state.players.values()
+        ],
+    }
+
+
+@app.get("/games/{game_id}/spectate")
+async def spectate_game(
+    game_id: str,
+    request: Request,
+    _: Annotated[None, Depends(_require_spectator_secret)],
+):
     if game_id not in _games:
         raise HTTPException(404, "Game not found")
     return spectator_stream(game_id, request)

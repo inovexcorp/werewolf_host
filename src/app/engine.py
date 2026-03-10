@@ -157,7 +157,12 @@ class GameEngine:
             {
                 "narration": narration,
                 "players": [
-                    {"id": p.id, "team": p.team, "avatar_url": p.avatar_url}
+                    {
+                        "id": p.id,
+                        "team": p.team,
+                        "avatar_url": p.avatar_url,
+                        "role": p.role,
+                    }
                     for p in self.state.players.values()
                 ],
             },
