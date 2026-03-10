@@ -123,7 +123,7 @@ class GameStatusResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-@app.post("/register")
+@app.post("/register", responses={400: {"description": "Invalid avatar"}})
 async def register_team(req: RegisterRequest):
     r = await get_redis()
     await r.hset("teams", req.team_name, req.agent_url)
@@ -165,7 +165,7 @@ async def list_teams():
     }
 
 
-@app.delete("/teams/{team_name}")
+@app.delete("/teams/{team_name}", responses={404: {"description": "Team not found"}})
 async def unregister_team(team_name: str):
     r = await get_redis()
     removed = await r.hdel("teams", team_name)
@@ -199,7 +199,10 @@ async def health_check():
     }
 
 
-@app.get("/teams/{team_name}/status")
+@app.get(
+    "/teams/{team_name}/status",
+    responses={404: {"description": "Team not found"}},
+)
 async def team_status(team_name: str):
     r = await get_redis()
     agent_url = await r.hget("teams", team_name)
@@ -217,7 +220,10 @@ async def team_status(team_name: str):
     }
 
 
-@app.post("/teams/{team_name}/check")
+@app.post(
+    "/teams/{team_name}/check",
+    responses={404: {"description": "Team not found"}},
+)
 async def check_team_connectivity(team_name: str):
     r = await get_redis()
     agent_url = await r.hget("teams", team_name)
@@ -246,7 +252,10 @@ async def check_team_connectivity(team_name: str):
 # ---------------------------------------------------------------------------
 
 
-@app.post("/games")
+@app.post(
+    "/games",
+    responses={400: {"description": "No teams / missing teams / too few teams"}},
+)
 async def create_game(req: CreateGameRequest, request: Request):
     r = await get_redis()
     all_teams = await r.hgetall("teams")
@@ -301,7 +310,14 @@ async def create_game(req: CreateGameRequest, request: Request):
     return {"game_id": game_id, "players": len(players), "status": "created"}
 
 
-@app.post("/games/{game_id}/start")
+@app.post(
+    "/games/{game_id}/start",
+    responses={
+        400: {"description": "Game already running"},
+        404: {"description": "Game not found"},
+        502: {"description": "Failed to connect to agents"},
+    },
+)
 async def start_game(game_id: str):
     engine = _games.get(game_id)
     if not engine:
@@ -351,7 +367,7 @@ async def list_games():
     return {"games": games}
 
 
-@app.get("/games/{game_id}")
+@app.get("/games/{game_id}", responses={404: {"description": "Game not found"}})
 async def get_game_status(game_id: str) -> GameStatusResponse:
     engine = _games.get(game_id)
     if not engine:
@@ -373,7 +389,13 @@ def _require_spectator_secret(request: Request) -> None:
             raise HTTPException(403, "Invalid or missing spectator secret")
 
 
-@app.get("/games/{game_id}/players")
+@app.get(
+    "/games/{game_id}/players",
+    responses={
+        403: {"description": "Invalid or missing spectator secret"},
+        404: {"description": "Game not found"},
+    },
+)
 async def get_game_players(
     game_id: str,
     _: Annotated[None, Depends(_require_spectator_secret)],
@@ -396,7 +418,13 @@ async def get_game_players(
     }
 
 
-@app.get("/games/{game_id}/spectate")
+@app.get(
+    "/games/{game_id}/spectate",
+    responses={
+        403: {"description": "Invalid or missing spectator secret"},
+        404: {"description": "Game not found"},
+    },
+)
 async def spectate_game(
     game_id: str,
     request: Request,
