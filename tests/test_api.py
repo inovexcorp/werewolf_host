@@ -3,26 +3,28 @@ class TestRegister:
         async with async_client as c:
             resp = await c.post(
                 "/register",
-                json={"team_name": "Alpha", "agent_url": "ws://localhost:8080/ws"},
+                json={"team_name": "Alpha"},
             )
         assert resp.status_code == 200
         data = resp.json()
         assert data["team_name"] == "Alpha"
         assert data["status"] == "registered"
+        assert "token" in data
 
 
 class TestTeams:
     async def test_list_teams(self, async_client, fake_redis):
-        await fake_redis.hset("teams", "Alpha", "ws://localhost:8080/ws")
+        await fake_redis.hset("teams", "Alpha", "some-token")
         async with async_client as c:
             resp = await c.get("/teams")
         assert resp.status_code == 200
         teams = resp.json()["teams"]
         assert len(teams) == 1
         assert teams[0]["team_name"] == "Alpha"
+        assert teams[0]["connected"] is False
 
     async def test_delete_team(self, async_client, fake_redis):
-        await fake_redis.hset("teams", "Alpha", "ws://localhost:8080/ws")
+        await fake_redis.hset("teams", "Alpha", "some-token")
         async with async_client as c:
             resp = await c.delete("/teams/Alpha")
             assert resp.status_code == 200
@@ -42,7 +44,7 @@ class TestHealth:
 class TestGames:
     async def _register_teams(self, redis, count=5):
         for i in range(count):
-            await redis.hset("teams", f"Team{i}", f"ws://localhost:808{i}/ws")
+            await redis.hset("teams", f"Team{i}", f"token-{i}")
 
     async def test_create_game(self, async_client, fake_redis):
         await self._register_teams(fake_redis, 5)

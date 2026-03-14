@@ -50,7 +50,7 @@ All prefixed with `WW_`:
 **Core modules in `src/app/`:**
 
 - **`engine.py`** — `GameEngine` orchestrates the full game loop: role assignment → night phase (wolf voting) → morning announcement → discussion → banishment voting (with runoff) → win check. Uses `_collect_messages_for()` to process agent messages within timed windows.
-- **`ws_manager.py`** — `ConnectionManager` handles outbound WebSocket connections to agents. The host *connects to* agents (agents are WS servers). Routes messages through two logical channels: public (all players) and wolf-only. Incoming messages are deserialized via Pydantic discriminated unions and queued.
+- **`ws_manager.py`** — `ConnectionManager` holds inbound WebSocket connections from agents. Agents register via POST (receiving a token), then connect to the host's `/ws/agent?token=...` endpoint. The manager waits for agents to connect, then routes messages through two logical channels: public (all players) and wolf-only. Incoming messages are deserialized via Pydantic discriminated unions and queued.
 - **`narrator.py`** — `Narrator` uses the OpenAI SDK (pointed at any compatible API) to generate dramatic narration for game events. Returns empty strings if no API key is configured.
 - **`spectator.py`** — SSE streaming endpoint backed by Redis pub/sub. Game events are published to `game:{id}:events` channels.
 - **`rate_limiter.py`** — In-memory per-phase rate limiting: max messages, cooldown between messages, message length. Reset each discussion phase.
@@ -63,7 +63,7 @@ All prefixed with `WW_`:
 
 ## Key Design Decisions
 
-- The host connects *to* agents (agents expose a WS server endpoint), not the other way around
+- Agents dial IN to the host (agents are pure WS clients; the host accepts inbound connections at `/ws/agent`). Registration returns a token used to authenticate the WebSocket.
 - All messages use a `type` field as a Pydantic discriminated union discriminator
 - `ChatBroadcast` and `WolfChatBroadcast` use `Field(alias="from")` for the sender field since `from` is a Python keyword
 - Game state is in-memory; Redis is used for team registry, pub/sub, and scoreboard

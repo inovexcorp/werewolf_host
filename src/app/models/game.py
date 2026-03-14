@@ -38,7 +38,6 @@ class Player(BaseModel):
     team: str
     role: Role = Role.VILLAGER
     alive: bool = True
-    ws_url: str = ""
     avatar_url: str = ""
 
     @property

@@ -19,7 +19,6 @@ def make_players(
             id=pid,
             team=pid,
             role=role,
-            ws_url=f"ws://localhost:808{i}/ws",
         )
     return players
 

@@ -1,13 +1,14 @@
 import asyncio
 import json
 import logging
+import secrets
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
 
-import websockets
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi import WebSocket as FastAPIWebSocket
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -19,6 +20,7 @@ from app.models.game import Player
 from app.narrator import Narrator
 from app.redis import close_redis, get_redis
 from app.spectator import spectator_stream
+from app.ws_manager import agent_connected, agent_disconnected, get_connected_agents
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -102,7 +104,6 @@ async def root():
 
 class RegisterRequest(BaseModel):
     team_name: str
-    agent_url: str  # e.g. "ws://192.168.1.42:8080/ws"
     avatar: str | None = None  # optional base64-encoded image
 
 
@@ -127,7 +128,16 @@ class GameStatusResponse(BaseModel):
 @app.post("/register", responses={400: {"description": "Invalid avatar"}})
 async def register_team(req: RegisterRequest):
     r = await get_redis()
-    await r.hset("teams", req.team_name, req.agent_url)
+    token = secrets.token_urlsafe(32)
+
+    # On re-registration, delete old reverse mapping
+    old_token = await r.hget("teams", req.team_name)
+    if old_token:
+        await r.hdel("team_tokens", old_token)
+
+    await r.hset("teams", req.team_name, token)
+    await r.hset("team_tokens", token, req.team_name)
+
     agent_id = req.team_name
 
     if req.avatar:
@@ -143,6 +153,7 @@ async def register_team(req: RegisterRequest):
     return {
         "agent_id": agent_id,
         "team_name": req.team_name,
+        "token": token,
         "avatar_url": f"/{avatar_path}",
         "status": "registered",
     }
@@ -154,14 +165,15 @@ async def list_teams():
     teams = await r.hgetall("teams")
     avatars = await r.hgetall("team_avatars")
     default = default_avatar_path()
+    connected = get_connected_agents()
     return {
         "teams": [
             {
                 "team_name": k,
-                "agent_url": v,
                 "avatar_url": f"/{avatars.get(k, default)}",
+                "connected": k in connected,
             }
-            for k, v in teams.items()
+            for k in teams
         ]
     }
 
@@ -169,9 +181,12 @@ async def list_teams():
 @app.delete("/teams/{team_name}", responses={404: {"description": "Team not found"}})
 async def unregister_team(team_name: str):
     r = await get_redis()
+    old_token = await r.hget("teams", team_name)
     removed = await r.hdel("teams", team_name)
     if not removed:
         raise HTTPException(404, "Team not found")
+    if old_token:
+        await r.hdel("team_tokens", old_token)
     return {"status": "removed"}
 
 
@@ -206,46 +221,44 @@ async def health_check():
 )
 async def team_status(team_name: str):
     r = await get_redis()
-    agent_url = await r.hget("teams", team_name)
-    if agent_url is None:
+    token = await r.hget("teams", team_name)
+    if token is None:
         raise HTTPException(404, "Team not found")
 
     avatars = await r.hgetall("team_avatars")
     avatar_path = avatars.get(team_name, default_avatar_path())
 
+    connected = get_connected_agents()
     return {
         "registered": True,
         "team_name": team_name,
-        "agent_url": agent_url,
         "avatar_url": f"/{avatar_path}",
+        "connected": team_name in connected,
     }
 
 
-@app.post(
-    "/teams/{team_name}/check",
-    responses={404: {"description": "Team not found"}},
-)
-async def check_team_connectivity(team_name: str):
-    r = await get_redis()
-    agent_url = await r.hget("teams", team_name)
-    if agent_url is None:
-        raise HTTPException(404, "Team not found")
+# ---------------------------------------------------------------------------
+# Agent WebSocket endpoint
+# ---------------------------------------------------------------------------
 
+
+@app.websocket("/ws/agent")
+async def agent_ws_endpoint(websocket: FastAPIWebSocket, token: str = Query(...)):
+    r = await get_redis()
+    team_name = await r.hget("team_tokens", token)
+    if not team_name:
+        await websocket.close(code=4001, reason="Invalid token")
+        return
+    await websocket.accept()
+    logger.info("Agent %s connected via WebSocket", team_name)
+    agent_connected(team_name, websocket)
     try:
-        async with websockets.connect(agent_url, open_timeout=5):
-            pass
-        return {
-            "team_name": team_name,
-            "agent_url": agent_url,
-            "reachable": True,
-        }
-    except Exception as e:
-        return {
-            "team_name": team_name,
-            "agent_url": agent_url,
-            "reachable": False,
-            "error": str(e),
-        }
+        while True:
+            await asyncio.sleep(3600)
+    except Exception:
+        logger.info("Agent %s WebSocket closed", team_name)
+    finally:
+        agent_disconnected(team_name)
 
 
 # ---------------------------------------------------------------------------
@@ -280,13 +293,12 @@ async def create_game(req: CreateGameRequest, request: Request):
 
     game_id = f"game_{uuid.uuid4().hex[:8]}"
     players = []
-    for team_name, agent_url in selected.items():
+    for team_name in selected:
         avatar_path = avatars.get(team_name, default)
         players.append(
             Player(
                 id=team_name,
                 team=team_name,
-                ws_url=agent_url,
                 avatar_url=f"/{avatar_path}",
             )
         )

@@ -77,13 +77,9 @@ class GameEngine:
     # ------------------------------------------------------------------
 
     async def setup(self) -> list[str]:
-        """Connect to all agents. Returns list of agent_ids that failed."""
-        failures = []
-        for p in self.state.players.values():
-            ok = await self.ws.connect(p.id, p.ws_url)
-            if not ok:
-                failures.append(p.id)
-        return failures
+        """Wait for all agents to connect inbound."""
+        agent_ids = list(self.state.players.keys())
+        return await self.ws.wait_for_connections(agent_ids, timeout=60)
 
     async def run(self):
         """Main game loop. Call after setup()."""

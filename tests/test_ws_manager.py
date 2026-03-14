@@ -3,9 +3,15 @@ import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from starlette.websockets import WebSocketDisconnect
 
 from app.models.messages import AgentChatMessage, ErrorMessage
-from app.ws_manager import ConnectionManager
+from app.ws_manager import (
+    ConnectionManager,
+    agent_connected,
+    agent_disconnected,
+    get_connected_agents,
+)
 
 
 class TestSend:
@@ -18,8 +24,8 @@ class TestSend:
         result = await mgr.send("a1", msg)
 
         assert result is True
-        mock_ws.send.assert_called_once()
-        payload = json.loads(mock_ws.send.call_args[0][0])
+        mock_ws.send_text.assert_called_once()
+        payload = json.loads(mock_ws.send_text.call_args[0][0])
         assert payload["type"] == "error"
         assert payload["code"] == "TEST"
 
@@ -39,8 +45,8 @@ class TestBroadcast:
         msg = ErrorMessage(code="X", message="y")
         await mgr.broadcast(["a1", "a2"], msg)
 
-        mgr._connections["a1"].send.assert_called_once()
-        mgr._connections["a2"].send.assert_called_once()
+        mgr._connections["a1"].send_text.assert_called_once()
+        mgr._connections["a2"].send_text.assert_called_once()
 
 
 class TestMessageQueue:
@@ -82,17 +88,35 @@ class TestDisconnect:
         assert "a1" not in mgr._listen_tasks
 
 
+class TestConnectionTracking:
+    async def test_connected_agents_round_trip(self):
+        mock_ws = AsyncMock()
+        assert get_connected_agents() == set()
+
+        agent_connected("a1", mock_ws)
+        agent_connected("a2", mock_ws)
+        assert get_connected_agents() == {"a1", "a2"}
+
+        agent_disconnected("a1")
+        assert get_connected_agents() == {"a2"}
+
+        agent_disconnected("a2")
+        assert get_connected_agents() == set()
+
+    async def test_disconnect_nonexistent_agent_is_safe(self):
+        agent_disconnected("nonexistent")
+        assert get_connected_agents() == set()
+
+
 class TestListenLoop:
     async def test_valid_json_queued(self):
         mgr = ConnectionManager()
         valid_msg = json.dumps({"type": "chat_message", "message": "hello"})
 
         mock_ws = AsyncMock()
-        mock_ws.__aiter__ = lambda self: self
-        mock_ws.__anext__ = AsyncMock(side_effect=[valid_msg, StopAsyncIteration])
+        mock_ws.receive_text = AsyncMock(side_effect=[valid_msg, WebSocketDisconnect()])
         mgr._connections["a1"] = mock_ws
 
-        # Run listen loop briefly
         await mgr._listen_loop("a1")
 
         assert not mgr._message_queue.empty()
@@ -104,9 +128,8 @@ class TestListenLoop:
         mgr = ConnectionManager()
 
         mock_ws = AsyncMock()
-        mock_ws.__aiter__ = lambda self: self
-        mock_ws.__anext__ = AsyncMock(
-            side_effect=["not valid json{{{", StopAsyncIteration]
+        mock_ws.receive_text = AsyncMock(
+            side_effect=["not valid json{{{", WebSocketDisconnect()]
         )
         mgr._connections["a1"] = mock_ws
 
@@ -115,7 +138,7 @@ class TestListenLoop:
         # Queue should be empty (invalid message not queued)
         assert mgr._message_queue.empty()
         # Error should have been sent
-        mock_ws.send.assert_called_once()
+        mock_ws.send_text.assert_called_once()
 
     async def test_no_connection_returns(self):
         mgr = ConnectionManager()

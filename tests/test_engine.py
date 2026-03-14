@@ -21,7 +21,7 @@ def _make_engine(player_count=6, wolf_count=1):
     engine.ws.broadcast_chat = AsyncMock()
     engine.ws.broadcast_typing = AsyncMock()
     engine.ws.broadcast_wolf_chat = AsyncMock()
-    engine.ws.connect = AsyncMock(return_value=True)
+    engine.ws.wait_for_connections = AsyncMock(return_value=[])
     engine.ws.disconnect = AsyncMock()
     engine.ws.disconnect_all = AsyncMock()
     engine.ws.start_listening = MagicMock()
