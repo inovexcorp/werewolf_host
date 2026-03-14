@@ -238,6 +238,21 @@ class Narrator:
             "Who should not see another dawn?"
         )
 
+    async def generate_seer_kickoff(self, round_num: int) -> str:
+        """Generate a private prompt for the Seer to choose an inspection target."""
+        text = await self._generate(
+            f"Round {round_num}: The Seer awakens in the night. "
+            "In 1-2 sentences, urge the Seer to choose wisely — "
+            "who do they wish to peer into the soul of tonight? "
+            "Be mystical and dramatic.",
+            max_tokens=150,
+        )
+        return (
+            text
+            or "The Seer awakens. Choose wisely — "
+            "who do you wish to peer into the soul of tonight?"
+        )
+
     async def generate_introduction_kickoff(self) -> str:
         """Generate a prompt encouraging players to introduce themselves."""
         text = await self._generate(
@@ -310,12 +325,18 @@ class Narrator:
 
     async def narrate_banishment(self, player_team: str, player_role: Role) -> str:
         """Narrate a player banishment and role reveal."""
-        was_wolf = player_role == Role.WEREWOLF
-        if was_wolf:
+        if player_role == Role.WEREWOLF:
             return await self._generate(
                 f"The village voted to banish {player_team}. "
                 f"The reveal: they WERE a werewolf! The village got one right. "
                 "Make this a triumphant moment."
+            )
+        if player_role == Role.SEER:
+            return await self._generate(
+                f"The village voted to banish {player_team}. "
+                f"The reveal: they were the village Seer — a devastating loss. "
+                "The one who could see the truth is gone. "
+                "Make this a tragic, gut-wrenching moment."
             )
         return await self._generate(
             f"The village voted to banish {player_team}. "

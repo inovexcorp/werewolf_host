@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     scoring_wolf_win_points: int = 3  # points per alive wolf on wolf win
     scoring_villager_win_points: int = 1  # per alive villager (x count)
 
+    # Seer
+    seer_player_threshold: int = 6
+
     # Avatars
     avatar_max_size_px: int = 512
     avatar_max_upload_bytes: int = 2_097_152  # 2 MB

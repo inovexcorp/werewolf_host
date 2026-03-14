@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.engine import GameEngine
 from app.models.game import Phase, Role
+from app.models.messages import AgentSeerInspect
 from app.narrator import Narrator
 from tests.factories import make_players
 
@@ -34,17 +35,35 @@ class TestAssignRoles:
         engine = _make_engine(player_count=6)
         engine._assign_roles()
         wolves = [p for p in engine.state.players.values() if p.role == Role.WEREWOLF]
+        seers = [p for p in engine.state.players.values() if p.role == Role.SEER]
         villagers = [
             p for p in engine.state.players.values() if p.role == Role.VILLAGER
         ]
         assert len(wolves) == 1
-        assert len(villagers) == 5
+        assert len(seers) == 1
+        assert len(villagers) == 4
 
     def test_correct_counts_8_players(self):
         engine = _make_engine(player_count=8)
         engine._assign_roles()
         wolves = [p for p in engine.state.players.values() if p.role == Role.WEREWOLF]
+        seers = [p for p in engine.state.players.values() if p.role == Role.SEER]
         assert len(wolves) == 2
+        assert len(seers) == 1
+
+    def test_no_seer_5_players(self):
+        engine = _make_engine(player_count=5)
+        engine._assign_roles()
+        seers = [p for p in engine.state.players.values() if p.role == Role.SEER]
+        assert len(seers) == 0
+
+    def test_seer_assigned_6_plus_players(self):
+        engine = _make_engine(player_count=6)
+        engine._assign_roles()
+        seers = [p for p in engine.state.players.values() if p.role == Role.SEER]
+        assert len(seers) == 1
+        # Seer should not be a wolf
+        assert seers[0].role != Role.WEREWOLF
 
 
 class TestResolveNightVotes:
@@ -144,6 +163,78 @@ class TestResolveBanishmentVotes:
             is_runoff=False, candidates=None
         )
         assert result is None
+
+
+class TestSeerInspect:
+    async def test_valid_inspect_returns_role(self):
+        engine = _make_engine(player_count=6, wolf_count=1)
+        # Manually set up a seer
+        engine.state.players["Team2"].role = Role.SEER
+        engine.state.phase = Phase.NIGHT
+
+        msg = AgentSeerInspect(target="Team0")  # Team0 is a wolf
+        result = engine._handle_night_message("Team2", msg)
+        assert result is True
+        # Should have sent a SeerResultMessage
+        engine.ws.send.assert_called()
+
+    async def test_inspect_by_non_seer_rejected(self):
+        engine = _make_engine(player_count=6, wolf_count=1)
+        engine.state.phase = Phase.NIGHT
+
+        msg = AgentSeerInspect(target="Team3")
+        # Team1 is a villager, not a seer
+        result = engine._handle_night_message("Team1", msg)
+        assert result is False
+
+    async def test_inspect_dead_player_rejected(self):
+        engine = _make_engine(player_count=6, wolf_count=1)
+        engine.state.players["Team2"].role = Role.SEER
+        engine.state.players["Team3"].alive = False
+        engine.state.phase = Phase.NIGHT
+
+        msg = AgentSeerInspect(target="Team3")
+        result = engine._handle_night_message("Team2", msg)
+        assert result is False
+
+    async def test_inspect_self_rejected(self):
+        engine = _make_engine(player_count=6, wolf_count=1)
+        engine.state.players["Team2"].role = Role.SEER
+        engine.state.phase = Phase.NIGHT
+
+        msg = AgentSeerInspect(target="Team2")
+        result = engine._handle_night_message("Team2", msg)
+        assert result is False
+
+    async def test_only_one_inspect_per_night(self):
+        engine = _make_engine(player_count=6, wolf_count=1)
+        engine.state.players["Team2"].role = Role.SEER
+        engine.state.phase = Phase.NIGHT
+
+        msg1 = AgentSeerInspect(target="Team3")
+        result1 = engine._handle_night_message("Team2", msg1)
+        assert result1 is True
+
+        msg2 = AgentSeerInspect(target="Team4")
+        result2 = engine._handle_night_message("Team2", msg2)
+        assert result2 is False
+
+    def test_seer_counts_as_villager_for_win(self):
+        engine = _make_engine(player_count=6, wolf_count=1)
+        engine.state.players["Team1"].role = Role.SEER
+        # Kill the wolf -> villagers should win
+        engine.state.players["Team0"].alive = False
+        assert engine._check_win() is True
+        assert engine.state.winner == "villagers"
+
+    def test_seer_counts_for_wolf_parity(self):
+        engine = _make_engine(player_count=6, wolf_count=1)
+        engine.state.players["Team1"].role = Role.SEER
+        # Kill all non-wolves except seer: wolf parity with 1 wolf + 1 seer
+        for i in range(2, 6):
+            engine.state.players[f"Team{i}"].alive = False
+        assert engine._check_win() is True
+        assert engine.state.winner == "werewolves"
 
 
 class TestSmokeRun:

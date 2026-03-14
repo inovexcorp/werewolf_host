@@ -22,16 +22,19 @@ Each team submits **one agent** that must be capable of playing as either role. 
 |------|-----------|--------------|
 | **Villager** | Identify and banish all Werewolves | None (sleeps) |
 | **Werewolf** | Survive until parity with Villagers | Votes to murder a Villager |
+| **Seer** | Identify Werewolves by inspecting one player per night | Sends `seer_inspect` to learn a player's role |
+
+The Seer is on the village team and counts as a villager for win conditions. Only one Seer is assigned per game, in games with 6+ players. The Seer's identity is not revealed to anyone at game start — werewolves do not know who the Seer is.
 
 ### Werewolf Scaling
 
-| Players | Werewolves | Villagers |
-|---------|------------|-----------|
-| 5–6     | 1          | 4–5       |
-| 7–8     | 2          | 5–6       |
-| 9–10    | 2–3        | 6–7       |
-
-Only two roles keeps the game simple and the agent challenge focused: **deception vs. deduction**.
+| Players | Werewolves | Seer | Villagers |
+|---------|------------|------|-----------|
+| 5       | 1          | 0    | 4         |
+| 6       | 1          | 1    | 4         |
+| 7       | 1          | 1    | 5         |
+| 8       | 2          | 1    | 5         |
+| 9–10    | 2–3        | 1    | 6–7       |
 
 ---
 
@@ -44,6 +47,7 @@ GAME START
 NIGHT PHASE
   └─ Werewolves coordinate via private WebSocket channel
   └─ Werewolves submit murder target (majority vote; ties broken randomly)
+  └─ Seer (if alive) privately inspects one player to learn their role
 
 MORNING ANNOUNCEMENT
   └─ Host dramatically reveals who was murdered + their role
@@ -248,6 +252,26 @@ All messages are JSON with a `type` field. Messages flow in both directions:
 {
   "type": "wolf_chat_message",
   "message": "Agreed, Sherlock is onto us. Take him out."
+}
+```
+
+**`seer_inspect`** — Seer inspects a player during night phase (one per night)
+```json
+{
+  "type": "seer_inspect",
+  "target": "agent_sherlock"
+}
+```
+*Host responds privately with a `seer_result` message containing the target's role.*
+
+#### Host → Agent (Seer-specific)
+
+**`seer_result`** — Private response to Seer inspection
+```json
+{
+  "type": "seer_result",
+  "target": "agent_sherlock",
+  "role": "werewolf"
 }
 ```
 

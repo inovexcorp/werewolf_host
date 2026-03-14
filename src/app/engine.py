@@ -17,6 +17,7 @@ from app.models.messages import (
     AgentBanishmentVote,
     AgentChatMessage,
     AgentNightVote,
+    AgentSeerInspect,
     AgentTypingIndicator,
     AgentWolfChat,
     EliminationMessage,
@@ -24,6 +25,7 @@ from app.models.messages import (
     GameEndMessage,
     GameStartMessage,
     PhaseChangeMessage,
+    SeerResultMessage,
     VoteResultMessage,
     VoteUpdateMessage,
 )
@@ -53,6 +55,7 @@ class GameEngine:
         self._phase_task: asyncio.Task | None = None
         self._had_runoff: bool = False
         self._first_round_votes: dict[str, str] = {}
+        self._seer_inspected: bool = False
         self._background_tasks: set[asyncio.Task] = set()
 
         for p in players:
@@ -118,6 +121,12 @@ class GameEngine:
 
         for i, p in enumerate(player_list):
             p.role = Role.WEREWOLF if i < n_wolves else Role.VILLAGER
+
+        # Assign one Seer if enough players
+        if len(player_list) >= settings.seer_player_threshold:
+            non_wolves = [p for p in player_list if p.role != Role.WEREWOLF]
+            if non_wolves:
+                non_wolves[0].role = Role.SEER
 
     # ------------------------------------------------------------------
     # Game start
@@ -243,6 +252,7 @@ class GameEngine:
     async def _night_phase(self):
         self.state.phase = Phase.NIGHT
         self.state.night_votes = {}
+        self._seer_inspected = False
 
         narration = await self.narrator.narrate_phase("night", self.state.round)
 
@@ -279,6 +289,20 @@ class GameEngine:
                 "phase": "night",
             }
         )
+
+        # Seer kickoff message (private to seer only)
+        for seer in self.state.alive_seers:
+            seer_kickoff = await self.narrator.generate_seer_kickoff(self.state.round)
+            await self.ws.send(
+                seer.id,
+                PhaseChangeMessage(
+                    phase=Phase.NIGHT,
+                    round=self.state.round,
+                    time_remaining_seconds=settings.night_duration,
+                    alive_players=self.state.alive_player_ids,
+                    host_narration=seer_kickoff,
+                ),
+            )
 
         await self._collect_messages_for(
             settings.night_duration,
@@ -357,6 +381,70 @@ class GameEngine:
                     "channel": "wolf",
                     "from": agent_id,
                     "message": msg.message,
+                    "round": self.state.round,
+                    "phase": "night",
+                }
+            )
+            return True
+
+        if isinstance(msg, AgentSeerInspect):
+            if player.role != Role.SEER:
+                self._fire_and_forget(
+                    self.ws.send(
+                        agent_id,
+                        ErrorMessage(
+                            code="NOT_SEER",
+                            message="Only the Seer can inspect players.",
+                        ),
+                    )
+                )
+                return False
+            if self._seer_inspected:
+                self._fire_and_forget(
+                    self.ws.send(
+                        agent_id,
+                        ErrorMessage(
+                            code="ALREADY_INSPECTED",
+                            message="You have already inspected someone this night.",
+                        ),
+                    )
+                )
+                return False
+            if msg.target not in self.state.alive_player_ids or msg.target == agent_id:
+                self._fire_and_forget(
+                    self.ws.send(
+                        agent_id,
+                        ErrorMessage(code="INVALID_TARGET", message="Invalid target."),
+                    )
+                )
+                return False
+            target_player = self.state.players[msg.target]
+            self._seer_inspected = True
+            self._fire_and_forget(
+                self.ws.send(
+                    agent_id,
+                    SeerResultMessage(
+                        target=msg.target,
+                        role=target_player.role.value,
+                    ),
+                )
+            )
+            self._fire_and_forget(
+                self._publish(
+                    "seer_inspect",
+                    {
+                        "seer": agent_id,
+                        "target": msg.target,
+                        "role": target_player.role.value,
+                        "round": self.state.round,
+                    },
+                )
+            )
+            self.state.chat_log.append(
+                {
+                    "channel": "seer",
+                    "from": agent_id,
+                    "message": f"Inspected {msg.target}: {target_player.role.value}",
                     "round": self.state.round,
                     "phase": "night",
                 }

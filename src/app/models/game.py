@@ -6,6 +6,7 @@ from pydantic import BaseModel
 class Role(StrEnum):
     VILLAGER = "villager"
     WEREWOLF = "werewolf"
+    SEER = "seer"
 
 
 class Phase(StrEnum):
@@ -78,7 +79,11 @@ class GameState(BaseModel):
 
     @property
     def alive_villagers(self) -> list[Player]:
-        return [p for p in self.alive_players if p.role == Role.VILLAGER]
+        return [p for p in self.alive_players if p.role in (Role.VILLAGER, Role.SEER)]
+
+    @property
+    def alive_seers(self) -> list[Player]:
+        return [p for p in self.alive_players if p.role == Role.SEER]
 
     def check_winner(self) -> str | None:
         wolves = len(self.alive_wolves)
