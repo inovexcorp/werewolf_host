@@ -13,7 +13,17 @@ async def _event_generator(game_id: str, request: Request):
     r = await get_redis()
     pubsub = r.pubsub()
     channel = f"game:{game_id}:events"
+    log_key = f"game:{game_id}:event_log"
+
+    # Subscribe FIRST so we don't miss events during replay
     await pubsub.subscribe(channel)
+
+    # Replay historical events
+    events = await r.lrange(log_key, 0, -1)
+    for event_data in events:
+        if await request.is_disconnected():
+            break
+        yield f"data: {event_data}\n\n"
 
     try:
         while True:

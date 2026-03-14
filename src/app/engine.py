@@ -16,6 +16,7 @@ from app.models.game import (
 from app.models.messages import (
     AgentBanishmentVote,
     AgentChatMessage,
+    AgentGuardProtect,
     AgentNightVote,
     AgentSeerInspect,
     AgentTypingIndicator,
@@ -24,6 +25,7 @@ from app.models.messages import (
     ErrorMessage,
     GameEndMessage,
     GameStartMessage,
+    GuardResultMessage,
     PhaseChangeMessage,
     SeerResultMessage,
     VoteResultMessage,
@@ -56,6 +58,9 @@ class GameEngine:
         self._had_runoff: bool = False
         self._first_round_votes: dict[str, str] = {}
         self._seer_inspected: bool = False
+        self._guard_protected: str | None = None
+        self._guard_last_protected: str | None = None
+        self._guard_acted: bool = False
         self._background_tasks: set[asyncio.Task] = set()
 
         for p in players:
@@ -93,8 +98,8 @@ class GameEngine:
                 self.state.round += 1
 
                 await self._night_phase()
-                victim = self._resolve_night_votes()
-                await self._morning_announcement(victim)
+                victim, was_guarded, saved_player_id = self._resolve_night_votes()
+                await self._morning_announcement(victim, was_guarded, saved_player_id)
 
                 if self._check_win():
                     break
@@ -127,6 +132,14 @@ class GameEngine:
             non_wolves = [p for p in player_list if p.role != Role.WEREWOLF]
             if non_wolves:
                 non_wolves[0].role = Role.SEER
+
+        # Assign one Guard if enough players
+        if len(player_list) >= settings.guard_player_threshold:
+            eligible = [
+                p for p in player_list if p.role not in (Role.WEREWOLF, Role.SEER)
+            ]
+            if eligible:
+                eligible[0].role = Role.GUARD
 
     # ------------------------------------------------------------------
     # Game start
@@ -253,6 +266,8 @@ class GameEngine:
         self.state.phase = Phase.NIGHT
         self.state.night_votes = {}
         self._seer_inspected = False
+        self._guard_protected = None
+        self._guard_acted = False
 
         narration = await self.narrator.narrate_phase("night", self.state.round)
 
@@ -267,6 +282,20 @@ class GameEngine:
         await self._publish(
             "phase_change", {"phase": "night", "round": self.state.round}
         )
+
+        # Guard kickoff message (private to guard only)
+        for guard in self.state.alive_guards:
+            guard_kickoff = await self.narrator.generate_guard_kickoff(self.state.round)
+            await self.ws.send(
+                guard.id,
+                PhaseChangeMessage(
+                    phase=Phase.NIGHT,
+                    round=self.state.round,
+                    time_remaining_seconds=settings.night_duration,
+                    alive_players=self.state.alive_player_ids,
+                    host_narration=guard_kickoff,
+                ),
+            )
 
         # Narrator kickoff message to wolf chat
         wolf_ids = [p.id for p in self.state.alive_wolves]
@@ -308,6 +337,16 @@ class GameEngine:
             settings.night_duration,
             allowed_handler=self._handle_night_message,
         )
+
+        if not self._guard_acted:
+            for guard in self.state.alive_guards:
+                await self._publish(
+                    "guard_sleep",
+                    {
+                        "guard": guard.id,
+                        "round": self.state.round,
+                    },
+                )
 
         if not self._seer_inspected:
             for seer in self.state.alive_seers:
@@ -397,6 +436,77 @@ class GameEngine:
             )
             return True
 
+        if isinstance(msg, AgentGuardProtect):
+            if player.role != Role.GUARD:
+                self._fire_and_forget(
+                    self.ws.send(
+                        agent_id,
+                        ErrorMessage(
+                            code="NOT_GUARD",
+                            message="Only the Guard can protect players.",
+                        ),
+                    )
+                )
+                return False
+            if self._guard_acted:
+                self._fire_and_forget(
+                    self.ws.send(
+                        agent_id,
+                        ErrorMessage(
+                            code="ALREADY_PROTECTED",
+                            message="You have already protected someone this night.",
+                        ),
+                    )
+                )
+                return False
+            if msg.target not in self.state.alive_player_ids:
+                self._fire_and_forget(
+                    self.ws.send(
+                        agent_id,
+                        ErrorMessage(code="INVALID_TARGET", message="Invalid target."),
+                    )
+                )
+                return False
+            if msg.target == self._guard_last_protected:
+                self._fire_and_forget(
+                    self.ws.send(
+                        agent_id,
+                        ErrorMessage(
+                            code="SAME_TARGET",
+                            message="Cannot protect the same player twice.",
+                        ),
+                    )
+                )
+                return False
+            self._guard_protected = msg.target
+            self._guard_acted = True
+            self._fire_and_forget(
+                self.ws.send(
+                    agent_id,
+                    GuardResultMessage(target=msg.target, protected=True),
+                )
+            )
+            self._fire_and_forget(
+                self._publish(
+                    "guard_protect",
+                    {
+                        "guard": agent_id,
+                        "target": msg.target,
+                        "round": self.state.round,
+                    },
+                )
+            )
+            self.state.chat_log.append(
+                {
+                    "channel": "guard",
+                    "from": agent_id,
+                    "message": f"Protecting {msg.target}",
+                    "round": self.state.round,
+                    "phase": "night",
+                }
+            )
+            return True
+
         if isinstance(msg, AgentSeerInspect):
             if player.role != Role.SEER:
                 self._fire_and_forget(
@@ -471,25 +581,44 @@ class GameEngine:
 
         return False
 
-    def _resolve_night_votes(self) -> Player | None:
+    def _resolve_night_votes(self) -> tuple[Player | None, bool, str | None]:
+        """Resolve night votes. Returns (victim, was_guarded, saved_player_id)."""
+        victim: Player | None = None
         if not self.state.night_votes:
             # Wolves didn't vote — random villager dies
             targets = self.state.alive_villagers
-            if not targets:
-                return None
-            return random.choice(targets)
+            if targets:
+                victim = random.choice(targets)
+        else:
+            vote_counts = Counter(self.state.night_votes.values())
+            max_votes = max(vote_counts.values())
+            top_targets = [t for t, c in vote_counts.items() if c == max_votes]
+            target_id = random.choice(top_targets)
+            victim = self.state.players.get(target_id)
 
-        vote_counts = Counter(self.state.night_votes.values())
-        max_votes = max(vote_counts.values())
-        top_targets = [t for t, c in vote_counts.items() if c == max_votes]
-        target_id = random.choice(top_targets)
-        return self.state.players.get(target_id)
+        # Check guard protection
+        was_guarded = False
+        saved_player_id: str | None = None
+        if victim and self._guard_protected and victim.id == self._guard_protected:
+            was_guarded = True
+            saved_player_id = victim.id
+            victim = None
+
+        # Update guard last-protected for next night's restriction
+        self._guard_last_protected = self._guard_protected
+
+        return victim, was_guarded, saved_player_id
 
     # ------------------------------------------------------------------
     # Morning announcement
     # ------------------------------------------------------------------
 
-    async def _morning_announcement(self, victim: Player | None):
+    async def _morning_announcement(
+        self,
+        victim: Player | None,
+        was_guarded: bool = False,
+        saved_player_id: str | None = None,
+    ):
         self.state.phase = Phase.MORNING
 
         if victim and victim.alive:
@@ -523,7 +652,39 @@ class GameEngine:
                 },
             )
             self.narrator.summary.record_night_result(self.state.round, victim.id)
+        elif was_guarded:
+            # Guard saved the target
+            narration = await self.narrator.narrate_guard_save()
+            if narration:
+                phase_msg = PhaseChangeMessage(
+                    phase=Phase.MORNING,
+                    round=self.state.round,
+                    time_remaining_seconds=0,
+                    alive_players=self.state.alive_player_ids,
+                    host_narration=narration,
+                )
+                await self.ws.broadcast(self.state.alive_player_ids, phase_msg)
+            await self._publish(
+                "guard_save",
+                {
+                    "round": self.state.round,
+                    "narration": narration,
+                    "saved_player": saved_player_id,
+                },
+            )
+            self.narrator.summary.record_night_result(self.state.round, None)
         else:
+            # Peaceful night — wolves didn't manage to kill anyone
+            narration = await self.narrator.narrate_peaceful_night()
+            if narration:
+                phase_msg = PhaseChangeMessage(
+                    phase=Phase.MORNING,
+                    round=self.state.round,
+                    time_remaining_seconds=0,
+                    alive_players=self.state.alive_player_ids,
+                    host_narration=narration,
+                )
+                await self.ws.broadcast(self.state.alive_player_ids, phase_msg)
             self.narrator.summary.record_night_result(self.state.round, None)
 
         await asyncio.sleep(settings.morning_announcement_pause)
@@ -591,6 +752,19 @@ class GameEngine:
         self.narrator.summary.record_discussion_highlights(
             self.state.round, round_chats
         )
+
+        # Generate and publish discussion summary for spectators
+        discussion_summary = await self.narrator.generate_discussion_summary(
+            round_chats
+        )
+        if discussion_summary:
+            await self._publish(
+                "discussion_summary",
+                {
+                    "round": self.state.round,
+                    "summary": discussion_summary,
+                },
+            )
 
     def _handle_discussion_message(self, agent_id: str, msg) -> bool:
         player = self.state.players.get(agent_id)

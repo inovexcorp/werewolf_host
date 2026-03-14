@@ -253,6 +253,52 @@ class Narrator:
             "who do you wish to peer into the soul of tonight?"
         )
 
+    async def generate_guard_kickoff(self, round_num: int) -> str:
+        """Generate a private prompt for the Guard to choose a protection target."""
+        text = await self._generate(
+            f"Round {round_num}: The Guard awakens in the night. "
+            "In 1-2 sentences, urge the Guard to choose wisely — "
+            "who will they shield from the wolves' fangs tonight? "
+            "Be dramatic and protective in tone.",
+            max_tokens=150,
+        )
+        return (
+            text
+            or "The Guard awakens. Choose wisely — "
+            "who will you shield from the wolves tonight?"
+        )
+
+    async def narrate_guard_save(self) -> str:
+        """Narrate that the guard's protection saved someone (no identity details)."""
+        text = await self._generate(
+            "The village wakes to discover that no one was killed last night. "
+            "The guard's protection held — someone was shielded from the wolves. "
+            "Narrate this dramatically without revealing who was protected or "
+            "who the guard is. 2-3 sentences.",
+            max_tokens=200,
+        )
+        return (
+            text
+            or "The village stirs at dawn... and every soul still draws breath. "
+            "The guard's vigilance held through the night — the wolves struck, "
+            "but their fangs found only an impenetrable shield."
+        )
+
+    async def narrate_peaceful_night(self) -> str:
+        """Narrate a night where no one died (wolves didn't vote / no target)."""
+        text = await self._generate(
+            "The village wakes to discover that no one was killed last night. "
+            "It was simply a quiet, peaceful night — no attack occurred. "
+            "Narrate this with a different tone than a guard save — more "
+            "eerie calm than triumphant protection. 2-3 sentences.",
+            max_tokens=200,
+        )
+        return (
+            text
+            or "Dawn breaks over a silent village. No screams pierced the night, "
+            "no blood stains the cobblestones. An eerie peace... but for how long?"
+        )
+
     async def generate_introduction_kickoff(self) -> str:
         """Generate a prompt encouraging players to introduce themselves."""
         text = await self._generate(
@@ -338,6 +384,13 @@ class Narrator:
                 "The one who could see the truth is gone. "
                 "Make this a tragic, gut-wrenching moment."
             )
+        if player_role == Role.GUARD:
+            return await self._generate(
+                f"The village voted to banish {player_team}. "
+                f"The reveal: they were the village Guard — the protector is gone. "
+                "No one will stand between the wolves and their prey now. "
+                "Make this a tragic, gut-wrenching moment."
+            )
         return await self._generate(
             f"The village voted to banish {player_team}. "
             f"The reveal: they were an innocent villager. "
@@ -375,6 +428,35 @@ class Narrator:
         )
 
         return await self._generate("\n".join(lines), max_tokens=600)
+
+    async def generate_discussion_summary(self, chat_entries: list[dict]) -> str:
+        """Generate a short bullet-point summary of the discussion for spectators.
+
+        Expects dicts with keys: "team", "message".
+        """
+        if not chat_entries:
+            return ""
+
+        # Build a condensed transcript for the LLM
+        lines = [f"{e['team']}: {e['message'][:200]}" for e in chat_entries[:30]]
+        transcript = "\n".join(lines)
+
+        return await self._generate(
+            "Below is the public discussion transcript from this round of "
+            "Werewolf. Summarize it in 3-5 bullet points for spectators.\n\n"
+            "Focus on:\n"
+            "- Coalitions forming (who is aligning with whom)\n"
+            "- Mobs/dogpiles targeting specific players\n"
+            "- Key accusations or defenses\n"
+            "- Notable strategic moves\n\n"
+            "Rules:\n"
+            "- Stay neutral — do NOT reveal or speculate about hidden roles\n"
+            "- Use player team names exactly as given\n"
+            "- Keep each bullet to 1-2 sentences\n"
+            "- Use markdown bullet format (- )\n\n"
+            f"Transcript:\n{transcript}",
+            max_tokens=300,
+        )
 
     async def narrate_game_end(self, winner: str, final_roles: dict[str, str]) -> str:
         """Narrate the dramatic game conclusion."""

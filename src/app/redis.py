@@ -25,3 +25,7 @@ async def close_redis():
 async def publish_event(channel: str, data: str):
     r = await get_redis()
     await r.publish(channel, data)
+    # Store for replay on reconnect
+    log_key = channel.replace(":events", ":event_log")
+    await r.rpush(log_key, data)
+    await r.expire(log_key, 14400)  # 4 hours

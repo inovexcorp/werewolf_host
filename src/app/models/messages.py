@@ -98,6 +98,12 @@ class SeerResultMessage(BaseModel):
     role: str
 
 
+class GuardResultMessage(BaseModel):
+    type: Literal["guard_result"] = "guard_result"
+    target: str
+    protected: bool
+
+
 class ErrorMessage(BaseModel):
     type: Literal["error"] = "error"
     code: str
@@ -115,6 +121,7 @@ HostMessage = Annotated[
     | EliminationMessage
     | GameEndMessage
     | SeerResultMessage
+    | GuardResultMessage
     | ErrorMessage,
     Field(discriminator="type"),
 ]
@@ -155,12 +162,18 @@ class AgentSeerInspect(BaseModel):
     target: str
 
 
+class AgentGuardProtect(BaseModel):
+    type: Literal["guard_protect"] = "guard_protect"
+    target: str
+
+
 AgentMessage = Annotated[
     AgentChatMessage
     | AgentTypingIndicator
     | AgentBanishmentVote
     | AgentNightVote
     | AgentWolfChat
-    | AgentSeerInspect,
+    | AgentSeerInspect
+    | AgentGuardProtect,
     Field(discriminator="type"),
 ]

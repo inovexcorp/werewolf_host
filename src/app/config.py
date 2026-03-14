@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     # Seer
     seer_player_threshold: int = 6
 
+    # Guard
+    guard_player_threshold: int = 6
+
     # Avatars
     avatar_max_size_px: int = 512
     avatar_max_upload_bytes: int = 2_097_152  # 2 MB
