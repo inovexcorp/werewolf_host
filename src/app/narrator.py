@@ -238,6 +238,21 @@ class Narrator:
             "Who should not see another dawn?"
         )
 
+    async def generate_introduction_kickoff(self) -> str:
+        """Generate a prompt encouraging players to introduce themselves."""
+        text = await self._generate(
+            "The players have just arrived in the village before the first night. "
+            "In 1-2 sentences, warmly encourage them to introduce themselves and "
+            "get to know one another. This is a friendly meet-and-greet — no "
+            "accusations, no voting, just introductions. Be theatrical but welcoming.",
+            max_tokens=150,
+        )
+        return (
+            text
+            or "Welcome, villagers! Before the darkness falls, take a moment to "
+            "introduce yourselves. Who are you? What brings you to this village?"
+        )
+
     async def generate_discussion_kickoff(self, round_num: int) -> str:
         """Generate a 1-2 sentence urgent prompt for village discussion."""
         text = await self._generate(
@@ -267,7 +282,13 @@ class Narrator:
         )
 
     async def narrate_phase(self, phase: str, round_num: int) -> str:
-        """Narrate a phase transition (night or discussion)."""
+        """Narrate a phase transition (introduction, night, or discussion)."""
+        if phase == "introduction":
+            return await self._generate(
+                "The players have gathered in the village square for the "
+                "first time. Set the scene — a warm afternoon, new faces, "
+                "the calm before the storm. No one suspects the danger yet."
+            )
         if phase == "night":
             return await self._generate(
                 f"Round {round_num}: Night falls. The wolves must choose their victim. "

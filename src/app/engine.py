@@ -83,6 +83,9 @@ class GameEngine:
             self._assign_roles()
             await self._send_game_start()
 
+            if settings.introduction_duration > 0:
+                await self._introduction_phase()
+
             while not self.state.winner:
                 self.state.round += 1
 
@@ -167,6 +170,71 @@ class GameEngine:
                 ],
             },
         )
+
+    # ------------------------------------------------------------------
+    # Introduction phase
+    # ------------------------------------------------------------------
+
+    async def _introduction_phase(self):
+        self.state.phase = Phase.INTRODUCTION
+
+        rate_limiter.reset_for_phase(
+            self.state.game_id,
+            self.state.alive_player_ids,
+            max_messages=settings.introduction_max_messages,
+            cooldown_seconds=settings.introduction_cooldown_seconds,
+        )
+
+        narration = await self.narrator.narrate_phase("introduction", 0)
+
+        phase_msg = PhaseChangeMessage(
+            phase=Phase.INTRODUCTION,
+            round=0,
+            time_remaining_seconds=settings.introduction_duration,
+            alive_players=self.state.alive_player_ids,
+            host_narration=narration,
+        )
+        await self.ws.broadcast(self.state.alive_player_ids, phase_msg)
+        await self._publish("phase_change", {"phase": "introduction", "round": 0})
+
+        # Narrator kickoff message to public chat
+        kickoff = await self.narrator.generate_introduction_kickoff()
+        await self.ws.broadcast_chat(self.state.alive_player_ids, NARRATOR_ID, kickoff)
+        await self._publish(
+            "chat_message",
+            {
+                "from": NARRATOR_ID,
+                "message": kickoff,
+            },
+        )
+        self.state.chat_log.append(
+            {
+                "channel": "public",
+                "from": NARRATOR_ID,
+                "message": kickoff,
+                "round": 0,
+                "phase": "introduction",
+            }
+        )
+
+        await self._collect_messages_for(
+            settings.introduction_duration,
+            allowed_handler=self._handle_discussion_message,
+        )
+
+        # Record intro highlights in narrator summary
+        intro_chats = [
+            {
+                "team": self.state.players[entry["from"]].id,
+                "message": entry["message"],
+            }
+            for entry in self.state.chat_log
+            if entry.get("round") == 0
+            and entry.get("phase") == "introduction"
+            and entry.get("channel") == "public"
+            and entry.get("from") != NARRATOR_ID
+        ]
+        self.narrator.summary.record_discussion_highlights(0, intro_chats)
 
     # ------------------------------------------------------------------
     # Night phase
@@ -457,7 +525,7 @@ class GameEngine:
                     "from": agent_id,
                     "message": msg.message,
                     "round": self.state.round,
-                    "phase": "discussion",
+                    "phase": self.state.phase.value,
                 }
             )
             self._fire_and_forget(

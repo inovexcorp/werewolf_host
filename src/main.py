@@ -40,6 +40,7 @@ def _log_settings_summary():
     logger.info("  Narrator model:  %s", settings.narrator_model)
     logger.info("  OpenAI base URL: %s", settings.openai_base_url)
     logger.info("  OpenAI API key:  %s", _redact_key(settings.openai_api_key))
+    logger.info("  Intro duration:  %ds", settings.introduction_duration)
     logger.info("  Night duration:  %ds", settings.night_duration)
     logger.info("  Discussion dur:  %ds", settings.discussion_duration)
     logger.info("  Voting duration: %ds", settings.voting_duration)

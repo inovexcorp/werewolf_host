@@ -10,6 +10,7 @@ class Role(StrEnum):
 
 class Phase(StrEnum):
     LOBBY = "lobby"
+    INTRODUCTION = "introduction"
     NIGHT = "night"
     MORNING = "morning"
     DISCUSSION = "discussion"

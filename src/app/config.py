@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     narrator_model: str = "gpt-5-mini"
 
     # Phase timing (seconds)
+    introduction_duration: int = 90
     night_duration: int = 45
     discussion_duration: int = 90
     voting_duration: int = 30
@@ -17,7 +18,11 @@ class Settings(BaseSettings):
     morning_announcement_pause: int = 5
     banishment_reveal_pause: int = 5
 
-    # Rate limits
+    # Rate limits — introduction phase
+    introduction_max_messages: int = 5
+    introduction_cooldown_seconds: float = 3.0
+
+    # Rate limits — discussion phase
     max_messages_per_discussion: int = 5
     message_cooldown_seconds: float = 3.0
     max_message_length: int = 280

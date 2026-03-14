@@ -6,17 +6,29 @@ from app.config import settings
 class RateLimiter:
     def __init__(self):
         # In-memory tracking per game round — reset each discussion phase
-        # Key: (game_id, agent_id), Value: {count, last_ts}
+        # Key: (game_id, agent_id), Value: {count, last_ts, max_messages, cooldown}
         self._counters: dict[tuple[str, str], dict] = {}
 
     def _key(self, game_id: str, agent_id: str) -> tuple[str, str]:
         return (game_id, agent_id)
 
-    def reset_for_phase(self, game_id: str, agent_ids: list[str]):
+    def reset_for_phase(
+        self,
+        game_id: str,
+        agent_ids: list[str],
+        max_messages: int | None = None,
+        cooldown_seconds: float | None = None,
+    ):
         for aid in agent_ids:
             self._counters[self._key(game_id, aid)] = {
                 "count": 0,
                 "last_ts": 0.0,
+                "max_messages": max_messages
+                if max_messages is not None
+                else settings.max_messages_per_discussion,
+                "cooldown": cooldown_seconds
+                if cooldown_seconds is not None
+                else settings.message_cooldown_seconds,
             }
 
     def check_chat_message(
@@ -31,11 +43,14 @@ class RateLimiter:
         if counter is None:
             return "NOT_IN_DISCUSSION"
 
-        if counter["count"] >= settings.max_messages_per_discussion:
+        max_messages = counter.get("max_messages", settings.max_messages_per_discussion)
+        cooldown = counter.get("cooldown", settings.message_cooldown_seconds)
+
+        if counter["count"] >= max_messages:
             return "MESSAGE_LIMIT_REACHED"
 
         now = time.monotonic()
-        if now - counter["last_ts"] < settings.message_cooldown_seconds:
+        if now - counter["last_ts"] < cooldown:
             return "RATE_LIMITED"
 
         counter["count"] += 1
