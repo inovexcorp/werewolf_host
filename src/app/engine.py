@@ -309,6 +309,16 @@ class GameEngine:
             allowed_handler=self._handle_night_message,
         )
 
+        if not self._seer_inspected:
+            for seer in self.state.alive_seers:
+                await self._publish(
+                    "seer_sleep",
+                    {
+                        "seer": seer.id,
+                        "round": self.state.round,
+                    },
+                )
+
     def _handle_night_message(self, agent_id: str, msg) -> bool:
         player = self.state.players.get(agent_id)
         if not player or not player.alive:
