@@ -238,6 +238,56 @@ async def team_status(team_name: str):
 
 
 # ---------------------------------------------------------------------------
+# Team stats (persistent, backed by metrics indexer)
+# ---------------------------------------------------------------------------
+
+
+@app.get(
+    "/teams/{team_name}/stats",
+    responses={404: {"description": "Team not found"}},
+)
+async def team_stats(team_name: str):
+    r = await get_redis()
+    token = await r.hget("teams", team_name)
+    if token is None:
+        raise HTTPException(404, "Team not found")
+
+    # Scoreboard data
+    score = await r.zscore("scoreboard", team_name)
+    rank = await r.zrevrank("scoreboard", team_name)
+
+    # Persistent stats from metrics indexer
+    raw = await r.hgetall(f"team_stats:{team_name}")
+
+    def g(key: str) -> int:
+        return int(raw.get(key, 0))
+
+    return {
+        "team_name": team_name,
+        "score": int(score) if score is not None else 0,
+        "rank": rank,
+        "games_played": g("games_played"),
+        "games_won": g("games_won"),
+        "games_lost": g("games_lost"),
+        "roles": {
+            "werewolf": g("role_werewolf"),
+            "villager": g("role_villager"),
+            "seer": g("role_seer"),
+            "guard": g("role_guard"),
+        },
+        "wins_by_role": {
+            "werewolf": g("wins_as_werewolf"),
+            "villager": g("wins_as_villager"),
+            "seer": g("wins_as_seer"),
+            "guard": g("wins_as_guard"),
+        },
+        "times_murdered": g("times_murdered"),
+        "times_banished": g("times_banished"),
+        "times_survived": g("times_survived"),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Agent WebSocket endpoint
 # ---------------------------------------------------------------------------
 
