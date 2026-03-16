@@ -25,6 +25,8 @@ from app.ws_manager import agent_connected, agent_disconnected, get_connected_ag
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+game_not_found: str = "Game not found"
+team_not_found: str = "Team not found"
 
 class _HealthCheckFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
@@ -54,6 +56,8 @@ def _log_settings_summary():
     logger.info("  Narrator model:  %s", settings.narrator_model)
     logger.info("  OpenAI base URL: %s", settings.openai_base_url)
     logger.info("  OpenAI API key:  %s", _redact_key(settings.openai_api_key))
+    logger.info("  Admin secret:    %s", _redact_key(settings.admin_secret))
+    logger.info("  Disable docs:    %s", settings.disable_docs)
     logger.info("  Intro duration:  %ds", settings.introduction_duration)
     logger.info("  Night duration:  %ds", settings.night_duration)
     logger.info("  Discussion dur:  %ds", settings.discussion_duration)
@@ -99,14 +103,35 @@ async def lifespan(app: FastAPI):
     await close_redis()
 
 
-app = FastAPI(title="Werewolf Host", version="0.1.0", lifespan=lifespan)
+app = FastAPI(
+    title="Werewolf Host",
+    version="0.1.0",
+    lifespan=lifespan,
+    **(
+        {"docs_url": None, "redoc_url": None, "openapi_url": None}
+        if settings.disable_docs
+        else {}
+    ),
+)
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 app.mount("/static", StaticFiles(directory=_PROJECT_ROOT / "static"), name="static")
 
+if not settings.disable_docs:
 
-@app.get("/")
-async def root():
-    return RedirectResponse(url="/docs")
+    @app.get("/")
+    async def root():
+        return RedirectResponse(url="/docs")
+
+
+# ---------------------------------------------------------------------------
+# Auth helpers
+# ---------------------------------------------------------------------------
+
+
+def _require_admin_secret(request: Request) -> None:
+    auth = request.headers.get("authorization", "")
+    if auth != f"Bearer {settings.admin_secret}":
+        raise HTTPException(403, "Invalid or missing admin secret")
 
 
 # ---------------------------------------------------------------------------
@@ -137,16 +162,32 @@ class GameStatusResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-@app.post("/register", responses={400: {"description": "Invalid avatar"}})
-async def register_team(req: RegisterRequest):
+@app.post(
+    "/register",
+    responses={
+        400: {"description": "Invalid avatar"},
+        403: {"description": "Invalid token for re-registration"},
+        409: {"description": "Team is in an active game"},
+    },
+)
+async def register_team(req: RegisterRequest, request: Request):
     r = await get_redis()
-    token = secrets.token_urlsafe(32)
 
-    # On re-registration, delete old reverse mapping
     old_token = await r.hget("teams", req.team_name)
     if old_token:
+        # Re-registration: require existing token
+        auth = request.headers.get("authorization", "")
+        if auth != f"Bearer {old_token}":
+            raise HTTPException(403, "Re-registration requires valid existing token")
+
+        # Block if team is in an active game
+        for game_id, engine in _games.items():
+            if game_id in _game_tasks and req.team_name in engine.state.players:
+                raise HTTPException(409, "Cannot re-register while in an active game")
+
         await r.hdel("team_tokens", old_token)
 
+    token = secrets.token_urlsafe(32)
     await r.hset("teams", req.team_name, token)
     await r.hset("team_tokens", token, req.team_name)
 
@@ -190,13 +231,22 @@ async def list_teams():
     }
 
 
-@app.delete("/teams/{team_name}", responses={404: {"description": "Team not found"}})
-async def unregister_team(team_name: str):
+@app.delete(
+    "/teams/{team_name}",
+    responses={
+        403: {"description": "Invalid or missing admin secret"},
+        404: {"description": team_not_found},
+    },
+)
+async def unregister_team(
+    team_name: str,
+    _: Annotated[None, Depends(_require_admin_secret)],
+):
     r = await get_redis()
     old_token = await r.hget("teams", team_name)
     removed = await r.hdel("teams", team_name)
     if not removed:
-        raise HTTPException(404, "Team not found")
+        raise HTTPException(404, team_not_found)
     if old_token:
         await r.hdel("team_tokens", old_token)
     return {"status": "removed"}
@@ -229,13 +279,13 @@ async def health_check():
 
 @app.get(
     "/teams/{team_name}/status",
-    responses={404: {"description": "Team not found"}},
+    responses={404: {"description": team_not_found}},
 )
 async def team_status(team_name: str):
     r = await get_redis()
     token = await r.hget("teams", team_name)
     if token is None:
-        raise HTTPException(404, "Team not found")
+        raise HTTPException(404, team_not_found)
 
     avatars = await r.hgetall("team_avatars")
     avatar_path = avatars.get(team_name, default_avatar_path())
@@ -256,13 +306,13 @@ async def team_status(team_name: str):
 
 @app.get(
     "/teams/{team_name}/stats",
-    responses={404: {"description": "Team not found"}},
+    responses={404: {"description": team_not_found}},
 )
 async def team_stats(team_name: str):
     r = await get_redis()
     token = await r.hget("teams", team_name)
     if token is None:
-        raise HTTPException(404, "Team not found")
+        raise HTTPException(404, team_not_found)
 
     # Scoreboard data
     score = await r.zscore("scoreboard", team_name)
@@ -330,9 +380,16 @@ async def agent_ws_endpoint(websocket: FastAPIWebSocket, token: str = Query(...)
 
 @app.post(
     "/games",
-    responses={400: {"description": "No teams / missing teams / too few teams"}},
+    responses={
+        400: {"description": "No teams / missing teams / too few teams"},
+        403: {"description": "Invalid or missing admin secret"},
+    },
 )
-async def create_game(req: CreateGameRequest, request: Request):
+async def create_game(
+    req: CreateGameRequest,
+    request: Request,
+    _: Annotated[None, Depends(_require_admin_secret)],
+):
     r = await get_redis()
     all_teams = await r.hgetall("teams")
 
@@ -389,14 +446,18 @@ async def create_game(req: CreateGameRequest, request: Request):
     "/games/{game_id}/start",
     responses={
         400: {"description": "Game already running"},
-        404: {"description": "Game not found"},
+        403: {"description": "Invalid or missing admin secret"},
+        404: {"description": game_not_found},
         502: {"description": "Failed to connect to agents"},
     },
 )
-async def start_game(game_id: str):
+async def start_game(
+    game_id: str,
+    _: Annotated[None, Depends(_require_admin_secret)],
+):
     engine = _games.get(game_id)
     if not engine:
-        raise HTTPException(404, "Game not found")
+        raise HTTPException(404, game_not_found)
     if game_id in _game_tasks:
         raise HTTPException(400, "Game already running")
 
@@ -442,11 +503,11 @@ async def list_games():
     return {"games": games}
 
 
-@app.get("/games/{game_id}", responses={404: {"description": "Game not found"}})
+@app.get("/games/{game_id}", responses={404: {"description": game_not_found}})
 async def get_game_status(game_id: str) -> GameStatusResponse:
     engine = _games.get(game_id)
     if not engine:
-        raise HTTPException(404, "Game not found")
+        raise HTTPException(404, game_not_found)
     return GameStatusResponse(
         game_id=engine.state.game_id,
         phase=engine.state.phase,
@@ -456,28 +517,20 @@ async def get_game_status(game_id: str) -> GameStatusResponse:
     )
 
 
-def _require_spectator_secret(request: Request) -> None:
-    secret = settings.spectator_secret
-    if secret:
-        auth = request.headers.get("authorization", "")
-        if auth != f"Bearer {secret}":
-            raise HTTPException(403, "Invalid or missing spectator secret")
-
-
 @app.get(
     "/games/{game_id}/players",
     responses={
-        403: {"description": "Invalid or missing spectator secret"},
-        404: {"description": "Game not found"},
+        403: {"description": "Invalid or missing admin secret"},
+        404: {"description": game_not_found},
     },
 )
 async def get_game_players(
     game_id: str,
-    _: Annotated[None, Depends(_require_spectator_secret)],
+    _: Annotated[None, Depends(_require_admin_secret)],
 ):
     engine = _games.get(game_id)
     if not engine:
-        raise HTTPException(404, "Game not found")
+        raise HTTPException(404, game_not_found)
     return {
         "game_id": game_id,
         "players": [
@@ -496,17 +549,17 @@ async def get_game_players(
 @app.get(
     "/games/{game_id}/spectate",
     responses={
-        403: {"description": "Invalid or missing spectator secret"},
-        404: {"description": "Game not found"},
+        403: {"description": "Invalid or missing admin secret"},
+        404: {"description": game_not_found},
     },
 )
 async def spectate_game(
     game_id: str,
     request: Request,
-    _: Annotated[None, Depends(_require_spectator_secret)],
+    _: Annotated[None, Depends(_require_admin_secret)],
 ):
     if game_id not in _games:
-        raise HTTPException(404, "Game not found")
+        raise HTTPException(404, game_not_found)
     return spectator_stream(game_id, request)
 
 

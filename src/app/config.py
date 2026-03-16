@@ -32,9 +32,9 @@ class Settings(BaseSettings):
     agent_response_timeout: int = 10
     reconnect_timeout: int = 10
 
-    # Spectator
-    spectator_secret: str = ""  # shared secret for spectator feed; empty = open access
-    spectator_wolf_chat_delay: int = 0  # 0 = hidden until game end
+    # Auth
+    admin_secret: str  # required via WW_ADMIN_SECRET
+    disable_docs: bool = False
 
     # Scoring
     scoring_wolf_win_points: int = 3  # points per alive wolf on wolf win

@@ -1,9 +1,24 @@
+import os
+
+os.environ.setdefault("WW_ADMIN_SECRET", "test-admin-secret")
+
 import fakeredis.aioredis
 import pytest
 
 import app.redis as redis_mod
 import app.ws_manager as ws_manager_mod
 import main as main_mod
+
+ADMIN_SECRET = "test-admin-secret"
+ADMIN_AUTH = {"authorization": f"Bearer {ADMIN_SECRET}"}
+
+
+@pytest.fixture(autouse=True)
+def _set_secrets(monkeypatch):
+    """Ensure required secrets are set for all tests."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "admin_secret", ADMIN_SECRET)
 
 
 @pytest.fixture(autouse=True)
