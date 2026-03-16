@@ -25,6 +25,18 @@ from app.ws_manager import agent_connected, agent_disconnected, get_connected_ag
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+class _HealthCheckFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        if "GET /health" in message:
+            logger.debug("Health check pinged (suppressed from access log)")
+            return False
+        return True
+
+
+logging.getLogger("uvicorn.access").addFilter(_HealthCheckFilter())
+
 # Track running games
 _games: dict[str, GameEngine] = {}
 _game_tasks: dict[str, asyncio.Task] = {}

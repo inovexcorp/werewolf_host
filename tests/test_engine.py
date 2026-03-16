@@ -150,7 +150,7 @@ class TestResolveBanishmentVotes:
         # Result should be one of the tied candidates (random vote assigned)
         assert result is not None
 
-    async def test_runoff_tie_random(self):
+    async def test_runoff_tie_no_banishment(self):
         engine = _make_engine(player_count=6, wolf_count=1)
         engine.state.banishment_votes = {
             "Team0": "Team3",
@@ -159,8 +159,7 @@ class TestResolveBanishmentVotes:
         result = await engine._resolve_banishment_votes(
             is_runoff=True, candidates=["Team3", "Team4"]
         )
-        assert result is not None
-        assert result.id in ("Team3", "Team4")
+        assert result is None
 
     async def test_empty_votes(self):
         engine = _make_engine(player_count=6, wolf_count=1)

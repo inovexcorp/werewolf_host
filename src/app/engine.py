@@ -923,8 +923,8 @@ class GameEngine:
             return self.state.players.get(tied[0])
 
         if is_runoff:
-            # Second tie → random elimination among tied
-            return self.state.players.get(random.choice(tied))
+            # Second tie → no one is banished
+            return None
 
         # First tie → runoff
         self._had_runoff = True
