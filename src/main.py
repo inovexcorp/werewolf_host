@@ -31,6 +31,8 @@ team_not_found: str = "Team not found"
 
 
 class _HealthCheckFilter(logging.Filter):
+    """Suppresses noisy health-check GET requests from the uvicorn access log."""
+
     def filter(self, record: logging.LogRecord) -> bool:
         message = record.getMessage()
         if "GET /health" in message:
@@ -50,12 +52,14 @@ _series_tasks: dict[str, asyncio.Task] = {}
 
 
 def _redact_key(key: str) -> str:
+    """Return a redacted version of a secret key for safe logging."""
     if not key:
         return "(not set)"
     return f"{key[:4]}...{key[-4:]}" if len(key) > 8 else "****"
 
 
 def _log_settings_summary():
+    """Log all relevant configuration values at startup (secrets are redacted)."""
     logger.info("=== Werewolf Host Configuration ===")
     logger.info("  Redis URL:       %s", settings.redis_url)
     logger.info("  Narrator model:  %s", settings.narrator_model)
@@ -74,6 +78,8 @@ def _log_settings_summary():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """FastAPI lifespan handler: initializes Redis, avatars, and narrator on startup;
+    cancels running games/series and closes Redis on shutdown."""
     # Log configuration summary
     _log_settings_summary()
 
@@ -136,6 +142,7 @@ if not settings.disable_docs:
 
 
 def _require_admin_secret(request: Request) -> None:
+    """FastAPI dependency that validates the Bearer token matches the admin secret."""
     auth = request.headers.get("authorization", "")
     if auth != f"Bearer {settings.admin_secret}":
         raise HTTPException(403, "Invalid or missing admin secret")
@@ -147,22 +154,30 @@ def _require_admin_secret(request: Request) -> None:
 
 
 class RegisterRequest(BaseModel):
+    """Body for POST /register — registers or re-registers a team."""
+
     team_name: str
     avatar: str | None = None  # optional base64-encoded image
 
 
 class CreateGameRequest(BaseModel):
+    """Body for POST /games — creates a new game with selected (or all) teams."""
+
     team_names: list[str] | None = None  # None = use all registered teams
     player_count: int | None = None
 
 
 class CreateSeriesRequest(BaseModel):
+    """Body for POST /games/series — kicks off a multi-game series."""
+
     name: str
     num_games: int  # must be >= 2
     team_names: list[str] | None = None
 
 
 class GameStatusResponse(BaseModel):
+    """Response model for GET /games/{game_id} with current game state."""
+
     game_id: str
     phase: str
     round: int
@@ -184,6 +199,11 @@ class GameStatusResponse(BaseModel):
     },
 )
 async def register_team(req: RegisterRequest, request: Request):
+    """Register a new team or re-register an existing one.
+
+    On re-registration the caller must supply the original token via Bearer auth.
+    Generates a new auth token, stores the team in Redis, and processes the avatar.
+    """
     r = await get_redis()
 
     old_token = await r.hget("teams", req.team_name)
@@ -227,6 +247,7 @@ async def register_team(req: RegisterRequest, request: Request):
 
 @app.get("/teams")
 async def list_teams():
+    """Return all registered teams with their avatar URLs and connection status."""
     r = await get_redis()
     teams = await r.hgetall("teams")
     avatars = await r.hgetall("team_avatars")
@@ -255,6 +276,7 @@ async def unregister_team(
     team_name: str,
     _: Annotated[None, Depends(_require_admin_secret)],
 ):
+    """Remove a team from the registry. Requires admin auth."""
     r = await get_redis()
     old_token = await r.hget("teams", team_name)
     removed = await r.hdel("teams", team_name)
@@ -272,6 +294,7 @@ async def unregister_team(
 
 @app.get("/health")
 async def health_check():
+    """Liveness probe: Redis connectivity, team count, active games."""
     redis_ok = True
     try:
         r = await get_redis()
@@ -295,6 +318,7 @@ async def health_check():
     responses={404: {"description": team_not_found}},
 )
 async def team_status(team_name: str):
+    """Return registration and connection status for a single team."""
     r = await get_redis()
     token = await r.hget("teams", team_name)
     if token is None:
@@ -322,6 +346,7 @@ async def team_status(team_name: str):
     responses={404: {"description": team_not_found}},
 )
 async def team_stats(team_name: str):
+    """Return aggregate stats for a team: rank, win/loss, role history."""
     r = await get_redis()
     token = await r.hget("teams", team_name)
     if token is None:
@@ -369,6 +394,11 @@ async def team_stats(team_name: str):
 
 @app.websocket("/ws/agent")
 async def agent_ws_endpoint(websocket: FastAPIWebSocket, token: str = Query(...)):
+    """Accept an inbound WebSocket from an AI agent.
+
+    Validates the token against Redis, registers the connection, and keeps
+    the socket alive until the agent disconnects.
+    """
     r = await get_redis()
     team_name = await r.hget("team_tokens", token)
     if not team_name:
@@ -450,7 +480,7 @@ async def _create_game_internal(
 
 
 async def _start_game_internal(game_id: str, engine: GameEngine) -> asyncio.Task:
-    """Start engine, return the running task."""
+    """Connect agents via WebSocket and launch the game loop as a task."""
     failures = await engine.setup()
     if failures:
         raise HTTPException(
@@ -483,6 +513,7 @@ async def create_game(
     request: Request,
     _: Annotated[None, Depends(_require_admin_secret)],
 ):
+    """Create a new game (but don't start it yet). Requires admin auth."""
     game_id, engine = await _create_game_internal(
         request.app.state, team_names=req.team_names
     )
@@ -506,6 +537,7 @@ async def start_game(
     game_id: str,
     _: Annotated[None, Depends(_require_admin_secret)],
 ):
+    """Start a previously created game: connect agents and kick off the game loop."""
     engine = _games.get(game_id)
     if not engine:
         raise HTTPException(404, game_not_found)
@@ -519,6 +551,7 @@ async def start_game(
 
 @app.get("/games")
 async def list_games():
+    """List all games (active first), including phase, player counts, and winner."""
     games = []
     for game_id, engine in _games.items():
         s = engine.state
@@ -540,6 +573,7 @@ async def list_games():
 
 @app.get("/games/{game_id}", responses={404: {"description": game_not_found}})
 async def get_game_status(game_id: str) -> GameStatusResponse:
+    """Return current game status: phase, round, alive players, winner."""
     engine = _games.get(game_id)
     if not engine:
         raise HTTPException(404, game_not_found)
@@ -563,6 +597,7 @@ async def get_game_players(
     game_id: str,
     _: Annotated[None, Depends(_require_admin_secret)],
 ):
+    """Return detailed player info (roles, alive status) for a game. Admin only."""
     engine = _games.get(game_id)
     if not engine:
         raise HTTPException(404, game_not_found)
@@ -593,6 +628,7 @@ async def spectate_game(
     request: Request,
     _: Annotated[None, Depends(_require_admin_secret)],
 ):
+    """Open an SSE stream of real-time game events for spectators. Admin only."""
     if game_id not in _games:
         raise HTTPException(404, game_not_found)
     return spectator_stream(game_id, request)
@@ -604,6 +640,7 @@ async def spectate_game(
 
 
 async def _publish_series_update(series_id: str, r):
+    """Publish the current series state to the Redis pub/sub channel for spectators."""
     meta = await r.hgetall(f"series:{series_id}:meta")
     payload = json.dumps(
         {
@@ -628,6 +665,11 @@ async def _run_series(
     team_names: list[str] | None,
     app_state,
 ):
+    """Run a multi-game series sequentially, with a configurable delay between games.
+
+    Creates, starts, and awaits each game in order, updating Redis metadata and
+    publishing progress events for spectators after each game completes.
+    """
     r = await get_redis()
     try:
         for i in range(total_games):
@@ -690,6 +732,7 @@ async def create_series(
     request: Request,
     _: Annotated[None, Depends(_require_admin_secret)],
 ):
+    """Create and immediately start a multi-game series as a background task."""
     if req.num_games < 2:
         raise HTTPException(400, "num_games must be >= 2")
 
@@ -727,6 +770,7 @@ async def create_series(
 
 @app.get("/series/{series_id}")
 async def get_series(series_id: str):
+    """Return metadata for a single series (progress, game IDs, status)."""
     r = await get_redis()
     meta = await r.hgetall(f"series:{series_id}:meta")
     if not meta:
@@ -745,6 +789,7 @@ async def get_series(series_id: str):
 
 @app.get("/series")
 async def list_series():
+    """Return all series with their metadata."""
     r = await get_redis()
     series_ids = await r.smembers("series_index")
     result = []
@@ -778,6 +823,7 @@ async def spectate_series(
     request: Request,
     _: Annotated[None, Depends(_require_admin_secret)],
 ):
+    """Open an SSE stream of series-level progress events. Admin only."""
     r = await get_redis()
     exists = await r.exists(f"series:{series_id}:meta")
     if not exists:
@@ -790,6 +836,7 @@ async def spectate_series(
     responses={404: {"description": "Series not found"}},
 )
 async def series_stats(series_id: str):
+    """Return per-team scores and game IDs for a series."""
     r = await get_redis()
     exists = await r.exists(f"series:{series_id}:meta")
     if not exists:
@@ -809,6 +856,7 @@ async def series_stats(series_id: str):
     responses={404: {"description": "Series not found"}},
 )
 async def series_scoreboard(series_id: str):
+    """Return the ranked scoreboard for a specific series."""
     r = await get_redis()
     exists = await r.exists(f"series:{series_id}:meta")
     if not exists:
@@ -826,6 +874,7 @@ async def series_scoreboard(series_id: str):
 
 @app.get("/scoreboard")
 async def get_scoreboard():
+    """Return the global scoreboard with all teams ranked by score (descending)."""
     r = await get_redis()
     scores = await r.zrevrange("scoreboard", 0, -1, withscores=True)
     return {
