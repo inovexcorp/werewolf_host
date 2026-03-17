@@ -27,6 +27,13 @@ _connect_events: dict[str, asyncio.Event] = {}
 _connected_agents: set[str] = set()
 
 
+def clear_pending() -> None:
+    """Reset global connection pool between games."""
+    _pending_connections.clear()
+    _connect_events.clear()
+    _connected_agents.clear()
+
+
 def agent_connected(agent_id: str, ws: WebSocket) -> None:
     """Called by the WS endpoint when an agent connects."""
     _pending_connections[agent_id] = ws

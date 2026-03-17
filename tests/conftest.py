@@ -6,8 +6,8 @@ import fakeredis.aioredis
 import pytest
 
 import app.redis as redis_mod
-import app.ws_manager as ws_manager_mod
 import main as main_mod
+from app.ws_manager import clear_pending
 
 ADMIN_SECRET = "test-admin-secret"
 ADMIN_AUTH = {"authorization": f"Bearer {ADMIN_SECRET}"}
@@ -37,11 +37,11 @@ def clear_games():
     """Ensure no game state leaks between tests."""
     main_mod._games.clear()
     main_mod._game_tasks.clear()
-    ws_manager_mod._connected_agents.clear()
+    clear_pending()
     yield
     main_mod._games.clear()
     main_mod._game_tasks.clear()
-    ws_manager_mod._connected_agents.clear()
+    clear_pending()
 
 
 @pytest.fixture

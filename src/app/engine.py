@@ -35,7 +35,7 @@ from app.narrator import Narrator
 from app.rate_limiter import rate_limiter
 from app.redis import publish_event
 from app.scoring import award_points
-from app.ws_manager import ConnectionManager
+from app.ws_manager import ConnectionManager, clear_pending
 
 logger = logging.getLogger(__name__)
 
@@ -83,33 +83,32 @@ class GameEngine:
 
     async def run(self):
         """Main game loop. Call after setup()."""
-        try:
-            self._assign_roles()
-            await self._send_game_start()
+        self._assign_roles()
+        await self._send_game_start()
 
-            if settings.introduction_duration > 0:
-                await self._introduction_phase()
+        if settings.introduction_duration > 0:
+            await self._introduction_phase()
 
-            while not self.state.winner:
-                self.state.round += 1
+        while not self.state.winner:
+            self.state.round += 1
 
-                await self._night_phase()
-                victim, was_guarded, saved_player_id = self._resolve_night_votes()
-                await self._morning_announcement(victim, was_guarded, saved_player_id)
+            await self._night_phase()
+            victim, was_guarded, saved_player_id = self._resolve_night_votes()
+            await self._morning_announcement(victim, was_guarded, saved_player_id)
 
-                if self._check_win():
-                    break
+            if self._check_win():
+                break
 
-                await self._discussion_phase()
-                banished = await self._voting_phase()
-                await self._banishment_reveal(banished)
+            await self._discussion_phase()
+            banished = await self._voting_phase()
+            await self._banishment_reveal(banished)
 
-                self._check_win()
+            self._check_win()
 
-            await self._send_game_end()
-            await award_points(self.state)
-        finally:
-            await self.ws.disconnect_all()
+        await self._send_game_end()
+        await award_points(self.state)
+        await self.ws.disconnect_all()
+        clear_pending()  # reset globals so next game gets fresh state
 
     # ------------------------------------------------------------------
     # Role assignment
