@@ -30,4 +30,10 @@ async def award_points(state: GameState) -> dict[str, int]:
         for team, points in awards.items():
             await r.zincrby("scoreboard", points, team)
 
+        # Series-scoped scoreboard
+        series_id = await r.get(f"game_series:{state.game_id}")
+        if series_id:
+            for team, points in awards.items():
+                await r.zincrby(f"series:{series_id}:scoreboard", points, team)
+
     return awards

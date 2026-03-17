@@ -51,6 +51,9 @@ class Settings(BaseSettings):
     avatar_max_upload_bytes: int = 2_097_152  # 2 MB
     avatar_dir: str = "static/avatars"
 
+    # Multi-game series
+    multi_game_delay: int = 30  # seconds between games in a series
+
 
 settings = Settings()
 

@@ -49,8 +49,10 @@ class GameEngine:
         players: list[Player],
         narrator: Narrator,
         host_backstory: str = "",
+        series_id: str | None = None,
     ):
-        self.state = GameState(game_id=game_id)
+        self.state = GameState(game_id=game_id, series_id=series_id)
+        self.series_id = series_id
         self.ws = ConnectionManager()
         self.narrator = narrator
         self.host_backstory = host_backstory
@@ -172,21 +174,21 @@ class GameEngine:
             [p.id for p in self.state.players.values()]
         )
 
-        await self._publish(
-            "game_start",
-            {
-                "narration": narration,
-                "players": [
-                    {
-                        "id": p.id,
-                        "team": p.team,
-                        "avatar_url": p.avatar_url,
-                        "role": p.role,
-                    }
-                    for p in self.state.players.values()
-                ],
-            },
-        )
+        game_start_data = {
+            "narration": narration,
+            "players": [
+                {
+                    "id": p.id,
+                    "team": p.team,
+                    "avatar_url": p.avatar_url,
+                    "role": p.role,
+                }
+                for p in self.state.players.values()
+            ],
+        }
+        if self.series_id is not None:
+            game_start_data["series_id"] = self.series_id
+        await self._publish("game_start", game_start_data)
 
     # ------------------------------------------------------------------
     # Introduction phase
@@ -1071,15 +1073,15 @@ class GameEngine:
         # Send to ALL players (alive and dead)
         all_ids = list(self.state.players.keys())
         await self.ws.broadcast(all_ids, msg)
-        await self._publish(
-            "game_end",
-            {
-                "winner": self.state.winner,
-                "final_roles": final_roles,
-                "narration": narration,
-                "chat_log": self.state.chat_log,
-            },
-        )
+        game_end_data = {
+            "winner": self.state.winner,
+            "final_roles": final_roles,
+            "narration": narration,
+            "chat_log": self.state.chat_log,
+        }
+        if self.series_id is not None:
+            game_end_data["series_id"] = self.series_id
+        await self._publish("game_end", game_end_data)
 
     # ------------------------------------------------------------------
     # Message collection loop

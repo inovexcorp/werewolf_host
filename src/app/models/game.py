@@ -54,6 +54,7 @@ class Elimination(BaseModel):
 
 class GameState(BaseModel):
     game_id: str
+    series_id: str | None = None
     phase: Phase = Phase.LOBBY
     round: int = 0
     players: dict[str, Player] = {}

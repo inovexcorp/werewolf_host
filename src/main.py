@@ -4,6 +4,7 @@ import logging
 import secrets
 import uuid
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -18,8 +19,8 @@ from app.config import settings
 from app.engine import GameEngine
 from app.models.game import Player
 from app.narrator import Narrator
-from app.redis import close_redis, get_redis
-from app.spectator import spectator_stream
+from app.redis import close_redis, get_redis, publish_event
+from app.spectator import series_spectator_stream, spectator_stream
 from app.ws_manager import agent_connected, agent_disconnected, get_connected_agents
 
 logging.basicConfig(level=logging.INFO)
@@ -27,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 game_not_found: str = "Game not found"
 team_not_found: str = "Team not found"
+
 
 class _HealthCheckFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
@@ -42,6 +44,9 @@ logging.getLogger("uvicorn.access").addFilter(_HealthCheckFilter())
 # Track running games
 _games: dict[str, GameEngine] = {}
 _game_tasks: dict[str, asyncio.Task] = {}
+
+# Track running series
+_series_tasks: dict[str, asyncio.Task] = {}
 
 
 def _redact_key(key: str) -> str:
@@ -98,6 +103,8 @@ async def lifespan(app: FastAPI):
 
     yield
     # Shutdown
+    for task in _series_tasks.values():
+        task.cancel()
     for task in _game_tasks.values():
         task.cancel()
     await close_redis()
@@ -147,6 +154,12 @@ class RegisterRequest(BaseModel):
 class CreateGameRequest(BaseModel):
     team_names: list[str] | None = None  # None = use all registered teams
     player_count: int | None = None
+
+
+class CreateSeriesRequest(BaseModel):
+    name: str
+    num_games: int  # must be >= 2
+    team_names: list[str] | None = None
 
 
 class GameStatusResponse(BaseModel):
@@ -378,29 +391,21 @@ async def agent_ws_endpoint(websocket: FastAPIWebSocket, token: str = Query(...)
 # ---------------------------------------------------------------------------
 
 
-@app.post(
-    "/games",
-    responses={
-        400: {"description": "No teams / missing teams / too few teams"},
-        403: {"description": "Invalid or missing admin secret"},
-    },
-)
-async def create_game(
-    req: CreateGameRequest,
-    request: Request,
-    _: Annotated[None, Depends(_require_admin_secret)],
-):
+async def _create_game_internal(
+    app_state, team_names: list[str] | None = None, series_id: str | None = None
+) -> tuple[str, GameEngine]:
+    """Create a game with registered teams. Returns (game_id, engine)."""
     r = await get_redis()
     all_teams = await r.hgetall("teams")
 
     if not all_teams:
         raise HTTPException(400, "No teams registered")
 
-    if req.team_names:
-        missing = [t for t in req.team_names if t not in all_teams]
+    if team_names:
+        missing = [t for t in team_names if t not in all_teams]
         if missing:
             raise HTTPException(400, f"Teams not found: {missing}")
-        selected = {t: all_teams[t] for t in req.team_names}
+        selected = {t: all_teams[t] for t in team_names}
     else:
         selected = dict(all_teams)
 
@@ -422,9 +427,11 @@ async def create_game(
             )
         )
 
-    backstory = getattr(request.app.state, "host_backstory", "")
+    backstory = getattr(app_state, "host_backstory", "")
     narrator = Narrator(host_backstory=backstory)
-    engine = GameEngine(game_id, players, narrator, host_backstory=backstory)
+    engine = GameEngine(
+        game_id, players, narrator, host_backstory=backstory, series_id=series_id
+    )
     _games[game_id] = engine
 
     # Store game metadata in Redis
@@ -439,7 +446,51 @@ async def create_game(
         ),
     )
 
-    return {"game_id": game_id, "players": len(players), "status": "created"}
+    return game_id, engine
+
+
+async def _start_game_internal(game_id: str, engine: GameEngine) -> asyncio.Task:
+    """Start engine, return the running task."""
+    failures = await engine.setup()
+    if failures:
+        raise HTTPException(
+            502,
+            f"Failed to connect to agents: {failures}",
+        )
+
+    async def _run_game():
+        try:
+            await engine.run()
+        except Exception:
+            logger.exception("Game %s crashed", game_id)
+        finally:
+            _game_tasks.pop(game_id, None)
+
+    task = asyncio.create_task(_run_game())
+    _game_tasks[game_id] = task
+    return task
+
+
+@app.post(
+    "/games",
+    responses={
+        400: {"description": "No teams / missing teams / too few teams"},
+        403: {"description": "Invalid or missing admin secret"},
+    },
+)
+async def create_game(
+    req: CreateGameRequest,
+    request: Request,
+    _: Annotated[None, Depends(_require_admin_secret)],
+):
+    game_id, engine = await _create_game_internal(
+        request.app.state, team_names=req.team_names
+    )
+    return {
+        "game_id": game_id,
+        "players": len(engine.state.players),
+        "status": "created",
+    }
 
 
 @app.post(
@@ -461,23 +512,7 @@ async def start_game(
     if game_id in _game_tasks:
         raise HTTPException(400, "Game already running")
 
-    failures = await engine.setup()
-    if failures:
-        raise HTTPException(
-            502,
-            f"Failed to connect to agents: {failures}",
-        )
-
-    async def _run_game():
-        try:
-            await engine.run()
-        except Exception:
-            logger.exception("Game %s crashed", game_id)
-        finally:
-            _game_tasks.pop(game_id, None)
-
-    task = asyncio.create_task(_run_game())
-    _game_tasks[game_id] = task
+    await _start_game_internal(game_id, engine)
 
     return {"game_id": game_id, "status": "started"}
 
@@ -561,6 +596,227 @@ async def spectate_game(
     if game_id not in _games:
         raise HTTPException(404, game_not_found)
     return spectator_stream(game_id, request)
+
+
+# ---------------------------------------------------------------------------
+# Series orchestration
+# ---------------------------------------------------------------------------
+
+
+async def _publish_series_update(series_id: str, r):
+    meta = await r.hgetall(f"series:{series_id}:meta")
+    payload = json.dumps(
+        {
+            "event": "series_update",
+            "series_id": series_id,
+            "name": meta.get("name", ""),
+            "total_games": int(meta.get("total_games", 0)),
+            "completed_games": int(meta.get("completed_games", 0)),
+            "current_game_id": meta.get("current_game_id", ""),
+            "game_ids": json.loads(meta.get("game_ids", "[]")),
+            "status": meta.get("status", ""),
+            "delay_seconds": settings.multi_game_delay,
+        }
+    )
+    await publish_event(f"series:{series_id}:events", payload)
+
+
+async def _run_series(
+    series_id: str,
+    name: str,
+    total_games: int,
+    team_names: list[str] | None,
+    app_state,
+):
+    r = await get_redis()
+    try:
+        for i in range(total_games):
+            game_id, engine = await _create_game_internal(
+                app_state, team_names, series_id=series_id
+            )
+
+            # Update Redis meta
+            raw_ids = await r.hget(f"series:{series_id}:meta", "game_ids")
+            game_ids = json.loads(raw_ids) if raw_ids else []
+            game_ids.append(game_id)
+            await r.hset(
+                f"series:{series_id}:meta",
+                mapping={
+                    "current_game_id": game_id,
+                    "game_ids": json.dumps(game_ids),
+                    "status": "running",
+                },
+            )
+
+            # Store mappings
+            await r.sadd(f"series:{series_id}:games", game_id)
+            await r.set(f"game_series:{game_id}", series_id)
+
+            # Publish series update
+            await _publish_series_update(series_id, r)
+
+            # Start and wait for game
+            task = await _start_game_internal(game_id, engine)
+            await task
+
+            # Increment completed
+            await r.hincrby(f"series:{series_id}:meta", "completed_games", 1)
+
+            if i < total_games - 1:
+                await r.hset(f"series:{series_id}:meta", "status", "between_games")
+                await _publish_series_update(series_id, r)
+                await asyncio.sleep(settings.multi_game_delay)
+                await r.hset(f"series:{series_id}:meta", "status", "running")
+
+        await r.hset(f"series:{series_id}:meta", "status", "completed")
+        await _publish_series_update(series_id, r)
+    except Exception:
+        logger.exception("Series %s crashed", series_id)
+        await r.hset(f"series:{series_id}:meta", "status", "error")
+        await _publish_series_update(series_id, r)
+    finally:
+        _series_tasks.pop(series_id, None)
+
+
+@app.post(
+    "/games/series",
+    responses={
+        400: {"description": "num_games must be >= 2"},
+        403: {"description": "Invalid or missing admin secret"},
+    },
+)
+async def create_series(
+    req: CreateSeriesRequest,
+    request: Request,
+    _: Annotated[None, Depends(_require_admin_secret)],
+):
+    if req.num_games < 2:
+        raise HTTPException(400, "num_games must be >= 2")
+
+    series_id = f"series_{uuid.uuid4().hex[:8]}"
+    r = await get_redis()
+
+    await r.hset(
+        f"series:{series_id}:meta",
+        mapping={
+            "name": req.name,
+            "total_games": str(req.num_games),
+            "status": "started",
+            "created_at": datetime.now(UTC).isoformat(),
+            "game_ids": json.dumps([]),
+            "current_game_id": "",
+            "completed_games": "0",
+        },
+    )
+    await r.sadd("series_index", series_id)
+
+    task = asyncio.create_task(
+        _run_series(
+            series_id, req.name, req.num_games, req.team_names, request.app.state
+        )
+    )
+    _series_tasks[series_id] = task
+
+    return {
+        "series_id": series_id,
+        "name": req.name,
+        "total_games": req.num_games,
+        "status": "started",
+    }
+
+
+@app.get("/series/{series_id}")
+async def get_series(series_id: str):
+    r = await get_redis()
+    meta = await r.hgetall(f"series:{series_id}:meta")
+    if not meta:
+        raise HTTPException(404, "Series not found")
+    return {
+        "series_id": series_id,
+        "name": meta.get("name", ""),
+        "total_games": int(meta.get("total_games", 0)),
+        "completed_games": int(meta.get("completed_games", 0)),
+        "current_game_id": meta.get("current_game_id", ""),
+        "game_ids": json.loads(meta.get("game_ids", "[]")),
+        "status": meta.get("status", ""),
+        "created_at": meta.get("created_at", ""),
+    }
+
+
+@app.get("/series")
+async def list_series():
+    r = await get_redis()
+    series_ids = await r.smembers("series_index")
+    result = []
+    for sid in series_ids:
+        meta = await r.hgetall(f"series:{sid}:meta")
+        if meta:
+            result.append(
+                {
+                    "series_id": sid,
+                    "name": meta.get("name", ""),
+                    "total_games": int(meta.get("total_games", 0)),
+                    "completed_games": int(meta.get("completed_games", 0)),
+                    "current_game_id": meta.get("current_game_id", ""),
+                    "game_ids": json.loads(meta.get("game_ids", "[]")),
+                    "status": meta.get("status", ""),
+                    "created_at": meta.get("created_at", ""),
+                }
+            )
+    return {"series": result}
+
+
+@app.get(
+    "/series/{series_id}/spectate",
+    responses={
+        403: {"description": "Invalid or missing admin secret"},
+        404: {"description": "Series not found"},
+    },
+)
+async def spectate_series(
+    series_id: str,
+    request: Request,
+    _: Annotated[None, Depends(_require_admin_secret)],
+):
+    r = await get_redis()
+    exists = await r.exists(f"series:{series_id}:meta")
+    if not exists:
+        raise HTTPException(404, "Series not found")
+    return series_spectator_stream(series_id, request)
+
+
+@app.get(
+    "/series/{series_id}/stats",
+    responses={404: {"description": "Series not found"}},
+)
+async def series_stats(series_id: str):
+    r = await get_redis()
+    exists = await r.exists(f"series:{series_id}:meta")
+    if not exists:
+        raise HTTPException(404, "Series not found")
+    game_ids = await r.smembers(f"series:{series_id}:games")
+    # Gather per-team stats from series scoreboard
+    scores = await r.zrevrange(f"series:{series_id}:scoreboard", 0, -1, withscores=True)
+    return {
+        "series_id": series_id,
+        "game_ids": list(game_ids),
+        "team_scores": [{"team": team, "score": int(score)} for team, score in scores],
+    }
+
+
+@app.get(
+    "/series/{series_id}/scoreboard",
+    responses={404: {"description": "Series not found"}},
+)
+async def series_scoreboard(series_id: str):
+    r = await get_redis()
+    exists = await r.exists(f"series:{series_id}:meta")
+    if not exists:
+        raise HTTPException(404, "Series not found")
+    scores = await r.zrevrange(f"series:{series_id}:scoreboard", 0, -1, withscores=True)
+    return {
+        "standings": [{"team": team, "score": int(score)} for team, score in scores]
+    }
 
 
 # ---------------------------------------------------------------------------
