@@ -13,6 +13,7 @@ from fastapi import WebSocket as FastAPIWebSocket
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.websockets import WebSocketDisconnect
 
 from app.avatar import default_avatar_path, ensure_avatar_dir, process_avatar
 from app.config import settings
@@ -409,9 +410,11 @@ async def agent_ws_endpoint(websocket: FastAPIWebSocket, token: str = Query(...)
     agent_connected(team_name, websocket)
     try:
         while True:
-            await asyncio.sleep(3600)
-    except Exception:
+            await websocket.receive()  # Blocks until data or disconnect
+    except WebSocketDisconnect:
         logger.info("Agent %s WebSocket closed", team_name)
+    except Exception:
+        logger.exception("Agent %s WebSocket error", team_name)
     finally:
         agent_disconnected(team_name)
 
