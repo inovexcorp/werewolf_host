@@ -25,6 +25,7 @@ _agent_message_adapter = TypeAdapter(AgentMessage)
 _pending_connections: dict[str, WebSocket] = {}
 _connect_events: dict[str, asyncio.Event] = {}
 _connected_agents: set[str] = set()
+_close_events: dict[str, asyncio.Event] = {}
 
 
 def clear_pending() -> None:
@@ -32,6 +33,21 @@ def clear_pending() -> None:
     _pending_connections.clear()
     _connect_events.clear()
     _connected_agents.clear()
+    _close_events.clear()
+
+
+def create_close_event(agent_id: str) -> asyncio.Event:
+    """Create an event the WS endpoint can await to stay alive without reading."""
+    event = asyncio.Event()
+    _close_events[agent_id] = event
+    return event
+
+
+def signal_close(agent_id: str) -> None:
+    """Signal the WS endpoint to exit cleanly."""
+    event = _close_events.pop(agent_id, None)
+    if event:
+        event.set()
 
 
 def agent_connected(agent_id: str, ws: WebSocket) -> None:
@@ -135,8 +151,10 @@ class ConnectionManager:
                     )
         except WebSocketDisconnect:
             logger.info("Agent %s disconnected", agent_id)
+            signal_close(agent_id)
         except Exception:
             logger.exception("Listen loop error for %s", agent_id)
+            signal_close(agent_id)
 
     async def get_next_message(self, timeout: float | None = None):
         """Returns (agent_id, AgentMessage) or raises asyncio.TimeoutError."""
@@ -194,6 +212,7 @@ class ConnectionManager:
         if ws:
             with contextlib.suppress(Exception):
                 await ws.close()
+        signal_close(agent_id)
 
     async def disconnect_all(self):
         for agent_id in list(self._connections.keys()):

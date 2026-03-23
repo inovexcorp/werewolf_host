@@ -13,7 +13,6 @@ from fastapi import WebSocket as FastAPIWebSocket
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from starlette.websockets import WebSocketDisconnect
 
 from app.avatar import default_avatar_path, ensure_avatar_dir, process_avatar
 from app.config import settings
@@ -22,7 +21,12 @@ from app.models.game import Player
 from app.narrator import Narrator
 from app.redis import close_redis, get_redis, publish_event
 from app.spectator import series_spectator_stream, spectator_stream
-from app.ws_manager import agent_connected, agent_disconnected, get_connected_agents
+from app.ws_manager import (
+    agent_connected,
+    agent_disconnected,
+    create_close_event,
+    get_connected_agents,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -407,12 +411,12 @@ async def agent_ws_endpoint(websocket: FastAPIWebSocket, token: str = Query(...)
         return
     await websocket.accept()
     logger.info("Agent %s connected via WebSocket", team_name)
+    close_event = create_close_event(team_name)
     agent_connected(team_name, websocket)
     try:
-        while True:
-            await websocket.receive()  # Blocks until data or disconnect
-    except WebSocketDisconnect:
-        logger.info("Agent %s WebSocket closed", team_name)
+        # Don't read from the socket here — _listen_loop in ConnectionManager
+        # is the sole reader.  Just keep the endpoint alive until signalled.
+        await close_event.wait()
     except Exception:
         logger.exception("Agent %s WebSocket error", team_name)
     finally:
