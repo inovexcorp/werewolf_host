@@ -1,7 +1,8 @@
-.PHONY: all lint test container help run run_container
+.PHONY: all lint test container help run run_container install
 
 ENGINE := $(shell command -v podman > /dev/null 2>&1 && echo podman || echo docker)
 IMAGE  := docker.io/inovexis/werewolf_host:local
+VENV   := .venv
 help:
 	@echo "Available make commands:"
 	@echo "  make build         - Run lint, test, and container build"
@@ -10,16 +11,23 @@ help:
 	@echo "  make container     - Build container image"
 	@echo "  make run           - Run lint, test, and start uvicorn server"
 	@echo "  make run_container - Run lint, test, and start containerized server"
+	@echo "  make venv          - Create .venv if it doesn't exist"
 	@echo "  make help          - Show this help message"
 
 
-build: lint test
+build: install lint test
+
+venv:
+	python3 -m venv $(VENV)
+
+install: venv
+	$(VENV)/bin/pip install -e ".[dev]"
 
 lint:
-	ruff check src/ tests/
+	$(VENV)/bin/python -m ruff check src/ tests/
 
 test:
-	pytest
+	$(VENV)/bin/python -m pytest
 
 container: build
 	$(ENGINE) build -t $(IMAGE) .
