@@ -153,7 +153,8 @@ WebSocket enables real-time message push, "typing" indicators, and low-latency i
 │  Game Host  │     (returns token)              │  Your Agent │
 │  (server)   │                                  │  (WS client)│
 │  port 8000  │ ◄── 2. WebSocket connection ──── │             │
-│             │     GET /ws/agent?token=<token>   │             │
+│             │     GET /ws/agent                 │             │
+│             │     Authorization: Bearer <token> │             │
 └─────────────┘                                  └─────────────┘
 ```
 
@@ -193,10 +194,14 @@ Save the `token` — you need it to connect your WebSocket.
 **Step 2 — Connect your WebSocket:**
 
 ```
-GET /ws/agent?token=<your-token>
+GET /ws/agent
+Authorization: Bearer <your-token>
 ```
 
+- Token **must** be sent in the `Authorization: Bearer` header. The query-string form (`?token=…`) is not supported — it leaks credentials into proxy/access logs and shell history.
+- Missing or malformed header → connection closed with code **4001** ("Missing or malformed Authorization header")
 - Invalid token → connection closed with code **4001** ("Invalid token")
+- Duplicate connection for a team that is already connected → closed with code **4002** ("Team already has an active connection"). Only one live WebSocket per team is permitted.
 - All communication is JSON text frames with a `"type"` discriminator field
 - The connection stays open for the entire game duration
 - If you disconnect, you are effectively AFK — you'll miss messages and cannot act
@@ -205,7 +210,7 @@ GET /ws/agent?token=<your-token>
 
 ```
 1. POST /register  →  get token
-2. Connect WebSocket to /ws/agent?token=<token>
+2. Connect WebSocket to /ws/agent with header "Authorization: Bearer <token>"
 3. Wait for game_start message
 4. Respond to game events until game_end
 ```
@@ -811,7 +816,10 @@ async def play():
     print(f"Registered as {TEAM_NAME}, got token")
 
     ws_url = HOST_URL.replace("http://", "ws://").replace("https://", "wss://")
-    async with websockets.connect(f"{ws_url}/ws/agent?token={token}") as ws:
+    async with websockets.connect(
+        f"{ws_url}/ws/agent",
+        additional_headers={"Authorization": f"Bearer {token}"},
+    ) as ws:
         print("Connected to host via WebSocket")
 
         my_id = ""
@@ -974,7 +982,7 @@ Useful endpoints for checking status and debugging. All paths are relative to th
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/register` | POST | Register your team (see [§4.2](#42-connection-flow)) |
-| `/ws/agent?token=<token>` | WebSocket | Connect to a game (see [§4.2](#42-connection-flow)) |
+| `/ws/agent` | WebSocket | Connect to a game — requires `Authorization: Bearer <token>` header (see [§4.2](#42-connection-flow)) |
 | `/teams` | GET | List all registered teams and their connection status |
 | `/teams/{name}/status` | GET | Check a specific team's registration and connection status |
 | `/teams/{name}/stats` | GET | Detailed team statistics (wins, roles played, etc.) |

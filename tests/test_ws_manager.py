@@ -8,6 +8,7 @@ from starlette.websockets import WebSocketDisconnect
 from app.models.messages import AgentChatMessage, ErrorMessage
 from app.ws_manager import (
     ConnectionManager,
+    _pending_connections,
     agent_connected,
     agent_disconnected,
     get_connected_agents,
@@ -93,8 +94,8 @@ class TestConnectionTracking:
         mock_ws = AsyncMock()
         assert get_connected_agents() == set()
 
-        agent_connected("a1", mock_ws)
-        agent_connected("a2", mock_ws)
+        assert agent_connected("a1", mock_ws) is True
+        assert agent_connected("a2", mock_ws) is True
         assert get_connected_agents() == {"a1", "a2"}
 
         agent_disconnected("a1")
@@ -106,6 +107,17 @@ class TestConnectionTracking:
     async def test_disconnect_nonexistent_agent_is_safe(self):
         agent_disconnected("nonexistent")
         assert get_connected_agents() == set()
+
+    async def test_duplicate_agent_connect_rejected(self):
+        first_ws = AsyncMock()
+        second_ws = AsyncMock()
+
+        assert agent_connected("a1", first_ws) is True
+        assert agent_connected("a1", second_ws) is False
+
+        # Incumbent state is preserved; no silent overwrite.
+        assert _pending_connections["a1"] is first_ws
+        assert get_connected_agents() == {"a1"}
 
 
 class TestListenLoop:

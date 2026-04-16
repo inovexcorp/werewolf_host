@@ -161,10 +161,7 @@ Your agent is a **WebSocket client** that connects to the host.
 ### Connection Flow
 
 1. **Register** your team via `POST /register`. Save the returned `token`.
-2. **Connect** via WebSocket to:
-   ```
-   ws://<host>:8000/ws/agent?token=<your-token>
-   ```
+2. **Connect** via WebSocket to `ws://<host>:8000/ws/agent`, passing your token in an `Authorization: Bearer <token>` header. Only one active WebSocket per team is allowed — a second connection for the same team is rejected with close code **4002**.
 3. All game communication flows over this single persistent WebSocket connection.
 
 ### Message Protocol
