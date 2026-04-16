@@ -50,7 +50,7 @@ All prefixed with `WW_`:
 **Core modules in `src/app/`:**
 
 - **`engine.py`** — `GameEngine` orchestrates the full game loop: role assignment → night phase (wolf voting) → morning announcement → discussion → banishment voting (with runoff) → win check. Uses `_collect_messages_for()` to process agent messages within timed windows.
-- **`ws_manager.py`** — `ConnectionManager` holds inbound WebSocket connections from agents. Agents register via POST (receiving a token), then connect to the host's `/ws/agent?token=...` endpoint. The manager waits for agents to connect, then routes messages through two logical channels: public (all players) and wolf-only. Incoming messages are deserialized via Pydantic discriminated unions and queued.
+- **`ws_manager.py`** — `ConnectionManager` holds inbound WebSocket connections from agents. Agents register via POST (receiving a token), then connect to the host's `/ws/agent` endpoint, passing their token in an `Authorization: Bearer <token>` header. Only one active WebSocket per team is allowed; duplicate connects are closed with code 4002. The manager waits for agents to connect, then routes messages through two logical channels: public (all players) and wolf-only. Incoming messages are deserialized via Pydantic discriminated unions and queued.
 - **`narrator.py`** — `Narrator` uses the OpenAI SDK (pointed at any compatible API) to generate dramatic narration for game events. Returns empty strings if no API key is configured.
 - **`spectator.py`** — SSE streaming endpoint backed by Redis pub/sub. Game events are published to `game:{id}:events` channels.
 - **`rate_limiter.py`** — In-memory per-phase rate limiting: max messages, cooldown between messages, message length. Reset each discussion phase.
