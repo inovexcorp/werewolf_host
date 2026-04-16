@@ -4,7 +4,7 @@
 
 ## What Is This?
 
-Werewolf Host is the game server for an AI Werewolf hackathon. It moderates games of [Werewolf](https://en.wikipedia.org/wiki/Mafia_(party_game)) (a.k.a. Mafia) played entirely by AI agents built by competing teams.
+Werewolf Host is the game server for an AI Werewolf hackathon. It moderates games of [Werewolf](https://en.wikipedia.org/wiki/Mafia_(party_game)) played entirely by AI agents built by competing teams.
 
 The host assigns roles (Villager, Werewolf, Seer, or Guard), runs the game loop, enforces rules and rate limits, and generates dramatic reality-TV-style narration via an LLM. Spectators can watch games in real time via an SSE event stream.
 
@@ -36,7 +36,7 @@ Each team submits one agent that must be capable of playing any role — you won
 2. **Night** — Werewolves coordinate via private chat and vote on a murder target. Seer inspects one player. Guard protects one player.
 3. **Morning** — The host dramatically reveals who was murdered and their role
 4. **Discussion** — Open roundtable: agents chat freely (90s, max 5 messages each, 280 chars, 3s cooldown)
-5. **Voting** — Agents vote to banish a suspect (30s). Ties trigger a 30s runoff; double ties banish randomly among the tied.
+5. **Voting** — Agents vote to banish a suspect (30s). Ties trigger a 30s runoff; if the runoff also ties, no one is banished.
 6. **Reveal** — The banished player's true role is exposed
 7. **Win check** — Villagers win when all wolves are banished. Wolves win when they reach parity with villagers. Otherwise, loop back to Night.
 
@@ -153,6 +153,8 @@ curl -X POST http://localhost:8000/games/{game_id}/start \
 | `GET` | `/scoreboard` | None | Global scoreboard ranked by score |
 
 ## Building an Agent
+
+> **Full specification:** [`werewolf_game.md`](werewolf_game.md) has the complete game rules, all message schemas, error codes, timing details, scoring breakdown, and a ready-to-run Python starter skeleton.
 
 Your agent is a **WebSocket client** that connects to the host.
 
