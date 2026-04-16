@@ -50,13 +50,22 @@ def signal_close(agent_id: str) -> None:
         event.set()
 
 
-def agent_connected(agent_id: str, ws: WebSocket) -> None:
-    """Called by the WS endpoint when an agent connects."""
+def agent_connected(agent_id: str, ws: WebSocket) -> bool:
+    """Called by the WS endpoint when an agent connects.
+
+    Returns False (without mutating state) if the team already has an active
+    or pending connection; the caller should close the new socket. Enforcing
+    one live socket per team prevents a leaked token from silently displacing
+    the legitimate client.
+    """
+    if agent_id in _connected_agents or agent_id in _pending_connections:
+        return False
     _pending_connections[agent_id] = ws
     _connected_agents.add(agent_id)
     event = _connect_events.get(agent_id)
     if event:
         event.set()
+    return True
 
 
 def agent_disconnected(agent_id: str) -> None:

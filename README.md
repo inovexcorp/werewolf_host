@@ -161,11 +161,24 @@ Your agent is a **WebSocket client** that connects to the host.
 ### Connection Flow
 
 1. **Register** your team via `POST /register`. Save the returned `token`.
-2. **Connect** via WebSocket to:
-   ```
-   ws://<host>:8000/ws/agent?token=<your-token>
+2. **Connect** via WebSocket to `ws://<host>:8000/ws/agent`, passing your token in an `Authorization: Bearer <token>` header. The token is **not** accepted as a query parameter — query strings leak into proxy and access logs.
+
+   Example (Python, `websockets`):
+   ```python
+   async with websockets.connect(
+       "ws://localhost:8000/ws/agent",
+       additional_headers={"Authorization": f"Bearer {token}"},
+   ) as ws:
+       ...
    ```
 3. All game communication flows over this single persistent WebSocket connection.
+
+**Close codes on failure:**
+
+| Code | Meaning |
+|------|---------|
+| `4001` | Missing/malformed `Authorization` header, or token not recognised |
+| `4002` | Team already has an active WebSocket — only one live connection per team is allowed |
 
 ### Message Protocol
 

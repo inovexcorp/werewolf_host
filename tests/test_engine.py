@@ -137,10 +137,13 @@ class TestResolveBanishmentVotes:
             "Team1": "Team4",
         }
         # The runoff will call _run_vote_round, which calls _collect_messages_for.
-        # Mock it to just resolve immediately.
+        # Mock it to just resolve immediately. Pin random.choice so every
+        # abstaining player picks Team3 — otherwise the runoff itself ties
+        # ~31% of the time (6 voters, 2 candidates) and this test flakes.
         with (
             patch.object(engine, "_collect_messages_for", new=AsyncMock()),
             patch.object(engine, "_publish", new=AsyncMock()),
+            patch("app.engine.random.choice", side_effect=lambda seq: seq[0]),
         ):
             result = await engine._resolve_banishment_votes(
                 is_runoff=False, candidates=None
@@ -149,6 +152,7 @@ class TestResolveBanishmentVotes:
         assert engine._had_runoff is True
         # Result should be one of the tied candidates (random vote assigned)
         assert result is not None
+        assert result.id == "Team3"
 
     async def test_runoff_tie_no_banishment(self):
         engine = _make_engine(player_count=6, wolf_count=1)

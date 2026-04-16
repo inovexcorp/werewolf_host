@@ -1,4 +1,7 @@
 import asyncio
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 import main as main_mod
 
@@ -136,6 +139,108 @@ class TestGames:
         async with async_client as c:
             resp = await c.get("/games/nonexistent")
         assert resp.status_code == 404
+
+
+def _make_mock_ws(headers: dict | None = None) -> MagicMock:
+    """Build a mock FastAPI WebSocket that records accept/close calls."""
+    ws = MagicMock()
+    ws.headers = headers or {}
+    ws.client = ("test-client", 0)
+    ws.accept = AsyncMock()
+    ws.close = AsyncMock()
+    return ws
+
+
+class TestAgentWebSocket:
+    """Exercise the /ws/agent endpoint handler directly with a mock WebSocket.
+
+    Avoids TestClient because its background thread runs a separate event loop
+    from the async fakeredis fixture, which causes 'bound to a different event
+    loop' errors. Calling the handler directly keeps everything in one loop.
+    """
+
+    @pytest.fixture
+    def endpoint(self):
+        return main_mod.agent_ws_endpoint
+
+    async def _register_token(self, fake_redis, team: str, token: str):
+        await fake_redis.hset("teams", team, token)
+        await fake_redis.hset("team_tokens", token, team)
+
+    async def test_missing_authorization_header_rejected(self, endpoint):
+        ws = _make_mock_ws(headers={})
+        await endpoint(ws)
+        ws.accept.assert_not_called()
+        ws.close.assert_awaited_once()
+        assert ws.close.await_args.kwargs["code"] == 4001
+
+    async def test_non_bearer_authorization_rejected(self, endpoint):
+        ws = _make_mock_ws(headers={"authorization": "Basic abc"})
+        await endpoint(ws)
+        ws.accept.assert_not_called()
+        ws.close.assert_awaited_once()
+        assert ws.close.await_args.kwargs["code"] == 4001
+
+    async def test_invalid_token_rejected(self, endpoint):
+        ws = _make_mock_ws(headers={"authorization": "Bearer nope"})
+        await endpoint(ws)
+        ws.accept.assert_not_called()
+        ws.close.assert_awaited_once()
+        assert ws.close.await_args.kwargs["code"] == 4001
+
+    async def test_query_string_token_is_ignored(self, fake_redis, endpoint):
+        # The query-string form is no longer accepted: even with a valid token
+        # in the (ignored) query, a request without a Bearer header must fail.
+        await self._register_token(fake_redis, "Alpha", "tok-alpha")
+        ws = _make_mock_ws(headers={})
+        await endpoint(ws)
+        ws.accept.assert_not_called()
+        ws.close.assert_awaited_once()
+        assert ws.close.await_args.kwargs["code"] == 4001
+
+    async def test_valid_bearer_header_accepts_connection(self, fake_redis, endpoint):
+        await self._register_token(fake_redis, "Alpha", "tok-alpha")
+        ws = _make_mock_ws(headers={"authorization": "Bearer tok-alpha"})
+
+        # The endpoint blocks on close_event.wait(); run it as a task and
+        # signal close once we've verified accept happened.
+        task = asyncio.create_task(endpoint(ws))
+        await asyncio.sleep(0)  # yield so endpoint progresses to accept
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        from app.ws_manager import get_connected_agents, signal_close
+
+        assert "Alpha" in get_connected_agents()
+        ws.accept.assert_awaited_once()
+        ws.close.assert_not_called()
+
+        signal_close("Alpha")
+        await task
+        assert "Alpha" not in get_connected_agents()
+
+    async def test_duplicate_connection_rejected(self, fake_redis, endpoint):
+        await self._register_token(fake_redis, "Alpha", "tok-alpha")
+        first = _make_mock_ws(headers={"authorization": "Bearer tok-alpha"})
+        second = _make_mock_ws(headers={"authorization": "Bearer tok-alpha"})
+
+        first_task = asyncio.create_task(endpoint(first))
+        for _ in range(3):
+            await asyncio.sleep(0)  # let first connection register
+
+        from app.ws_manager import signal_close
+
+        await endpoint(second)
+
+        # First got through; second was rejected with 4002.
+        first.accept.assert_awaited_once()
+        first.close.assert_not_called()
+        second.accept.assert_awaited_once()
+        second.close.assert_awaited_once()
+        assert second.close.await_args.kwargs["code"] == 4002
+
+        signal_close("Alpha")
+        await first_task
 
 
 class TestScoreboard:

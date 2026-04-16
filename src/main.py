@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi import WebSocket as FastAPIWebSocket
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -398,21 +398,38 @@ async def team_stats(team_name: str):
 
 
 @app.websocket("/ws/agent")
-async def agent_ws_endpoint(websocket: FastAPIWebSocket, token: str = Query(...)):
+async def agent_ws_endpoint(websocket: FastAPIWebSocket):
     """Accept an inbound WebSocket from an AI agent.
 
-    Validates the token against Redis, registers the connection, and keeps
-    the socket alive until the agent disconnects.
+    Authenticates via `Authorization: Bearer <token>` header, registers the
+    connection, and keeps the socket alive until the agent disconnects.
     """
+    auth = websocket.headers.get("authorization", "")
+    if not auth.startswith("Bearer "):
+        await websocket.close(
+            code=4001, reason="Missing or malformed Authorization header"
+        )
+        return
+    token = auth.removeprefix("Bearer ")
+
     r = await get_redis()
     team_name = await r.hget("team_tokens", token)
     if not team_name:
         await websocket.close(code=4001, reason="Invalid token")
         return
+
     await websocket.accept()
+    if not agent_connected(team_name, websocket):
+        logger.info(
+            "Rejecting duplicate WebSocket for team %s from %s",
+            team_name,
+            websocket.client,
+        )
+        await websocket.close(code=4002, reason="Team already has an active connection")
+        return
+
     logger.info("Agent %s connected via WebSocket", team_name)
     close_event = create_close_event(team_name)
-    agent_connected(team_name, websocket)
     try:
         # Don't read from the socket here — _listen_loop in ConnectionManager
         # is the sole reader.  Just keep the endpoint alive until signalled.
