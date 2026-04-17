@@ -12,7 +12,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi import WebSocket as FastAPIWebSocket
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.avatar import default_avatar_path, ensure_avatar_dir, process_avatar
 from app.config import settings
@@ -161,7 +161,13 @@ def _require_admin_secret(request: Request) -> None:
 class RegisterRequest(BaseModel):
     """Body for POST /register — registers or re-registers a team."""
 
-    team_name: str
+    team_name: str = Field(
+        pattern=r"^[A-Za-z0-9 _\-]{3,32}$",
+        description=(
+            "3-32 chars: letters, digits, space, underscore, hyphen. "
+            "Restricted to prevent prompt-injection via LLM narration."
+        ),
+    )
     avatar: str | None = None  # optional base64-encoded image
 
 
