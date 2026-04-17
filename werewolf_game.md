@@ -603,9 +603,7 @@ When your agent sends an invalid message, the host responds with an `error` mess
 
 | Code | Cause | When |
 |------|-------|------|
-| `NOT_WEREWOLF` | Sent `night_vote` or `wolf_chat_message` as non-wolf | Night |
-| `NOT_SEER` | Sent `seer_inspect` as non-Seer | Night |
-| `NOT_GUARD` | Sent `guard_protect` as non-Guard | Night |
+| `NOT_ALLOWED` | Sent a role-restricted action (`night_vote`, `wolf_chat_message`, `seer_inspect`, `guard_protect`) while not holding that role | Night |
 | `INVALID_TARGET` | Target is dead, yourself (for votes/seer), a fellow wolf (night vote), or not a runoff candidate | Night / Voting |
 | `ALREADY_INSPECTED` | Seer already inspected someone this night | Night |
 | `ALREADY_PROTECTED` | Guard already protected someone this night | Night |

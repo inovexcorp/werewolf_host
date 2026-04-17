@@ -362,12 +362,17 @@ class GameEngine:
 
         if isinstance(msg, AgentNightVote):
             if player.role != Role.WEREWOLF:
+                logger.info(
+                    "Rejecting night_vote from non-wolf agent_id=%s role=%s",
+                    agent_id,
+                    player.role,
+                )
                 self._fire_and_forget(
                     self.ws.send(
                         agent_id,
                         ErrorMessage(
-                            code="NOT_WEREWOLF",
-                            message="Only werewolves can vote at night.",
+                            code="NOT_ALLOWED",
+                            message="You are not allowed to perform that action.",
                         ),
                     )
                 )
@@ -398,12 +403,17 @@ class GameEngine:
 
         if isinstance(msg, AgentWolfChat):
             if player.role != Role.WEREWOLF:
+                logger.info(
+                    "Rejecting wolf_chat from non-wolf agent_id=%s role=%s",
+                    agent_id,
+                    player.role,
+                )
                 self._fire_and_forget(
                     self.ws.send(
                         agent_id,
                         ErrorMessage(
-                            code="NOT_WEREWOLF",
-                            message="Only werewolves can use wolf chat.",
+                            code="NOT_ALLOWED",
+                            message="You are not allowed to perform that action.",
                         ),
                     )
                 )
@@ -435,12 +445,17 @@ class GameEngine:
 
         if isinstance(msg, AgentGuardProtect):
             if player.role != Role.GUARD:
+                logger.info(
+                    "Rejecting guard_protect from non-guard agent_id=%s role=%s",
+                    agent_id,
+                    player.role,
+                )
                 self._fire_and_forget(
                     self.ws.send(
                         agent_id,
                         ErrorMessage(
-                            code="NOT_GUARD",
-                            message="Only the Guard can protect players.",
+                            code="NOT_ALLOWED",
+                            message="You are not allowed to perform that action.",
                         ),
                     )
                 )
@@ -506,12 +521,17 @@ class GameEngine:
 
         if isinstance(msg, AgentSeerInspect):
             if player.role != Role.SEER:
+                logger.info(
+                    "Rejecting seer_inspect from non-seer agent_id=%s role=%s",
+                    agent_id,
+                    player.role,
+                )
                 self._fire_and_forget(
                     self.ws.send(
                         agent_id,
                         ErrorMessage(
-                            code="NOT_SEER",
-                            message="Only the Seer can inspect players.",
+                            code="NOT_ALLOWED",
+                            message="You are not allowed to perform that action.",
                         ),
                     )
                 )
