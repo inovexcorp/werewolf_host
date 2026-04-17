@@ -54,6 +54,10 @@ class Settings(BaseSettings):
     # Multi-game series
     multi_game_delay: int = 30  # seconds between games in a series
 
+    # Spectator
+    spectator_replay_cap: int = 500  # max events replayed on SSE connect
+    spectator_heartbeat_seconds: float = 15.0  # keepalive cadence for SSE streams
+
 
 settings = Settings()
 
