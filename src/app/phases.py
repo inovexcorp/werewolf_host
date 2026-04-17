@@ -63,9 +63,12 @@ async def run_introduction_phase(engine: "GameEngine") -> None:
         }
     )
 
+    async def discussion_handler(aid, m):
+        return await _handle_discussion_message(engine, aid, m)
+
     await engine._collect_messages_for(
         settings.introduction_duration,
-        allowed_handler=lambda aid, m: _handle_discussion_message(engine, aid, m),
+        allowed_handler=discussion_handler,
     )
 
     intro_chats = [
@@ -269,9 +272,12 @@ async def run_discussion_phase(engine: "GameEngine") -> None:
         }
     )
 
+    async def discussion_handler(aid, m):
+        return await _handle_discussion_message(engine, aid, m)
+
     await engine._collect_messages_for(
         settings.discussion_duration,
-        allowed_handler=lambda aid, m: _handle_discussion_message(engine, aid, m),
+        allowed_handler=discussion_handler,
     )
 
     round_chats = [
@@ -300,7 +306,7 @@ async def run_discussion_phase(engine: "GameEngine") -> None:
         )
 
 
-def _handle_discussion_message(engine: "GameEngine", agent_id: str, msg) -> bool:
+async def _handle_discussion_message(engine: "GameEngine", agent_id: str, msg) -> bool:
     player = engine.state.players.get(agent_id)
     if not player or not player.alive:
         return False
@@ -310,13 +316,9 @@ def _handle_discussion_message(engine: "GameEngine", agent_id: str, msg) -> bool
             engine.state.game_id, agent_id, msg.message
         )
         if error_code:
-            engine._fire_and_forget(
-                engine.ws.send(
-                    agent_id,
-                    ErrorMessage(
-                        code=error_code, message=f"Chat rejected: {error_code}"
-                    ),
-                )
+            await engine.ws.send(
+                agent_id,
+                ErrorMessage(code=error_code, message=f"Chat rejected: {error_code}"),
             )
             return False
 
@@ -401,7 +403,7 @@ async def _run_vote_round(
 
     total_voters = len(engine.state.alive_player_ids)
 
-    def vote_handler(agent_id: str, msg) -> bool:
+    async def vote_handler(agent_id: str, msg) -> bool:
         player = engine.state.players.get(agent_id)
         if not player or not player.alive:
             return False
@@ -412,13 +414,9 @@ async def _run_vote_round(
                 p for p in engine.state.alive_player_ids if p != agent_id
             ]
             if target not in valid_targets:
-                engine._fire_and_forget(
-                    engine.ws.send(
-                        agent_id,
-                        ErrorMessage(
-                            code="INVALID_TARGET", message="Invalid vote target."
-                        ),
-                    )
+                await engine.ws.send(
+                    agent_id,
+                    ErrorMessage(code="INVALID_TARGET", message="Invalid vote target."),
                 )
                 return False
             engine.state.banishment_votes[agent_id] = target

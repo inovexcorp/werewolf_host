@@ -182,7 +182,7 @@ class TestSeerInspect:
         engine.state.phase = Phase.NIGHT
 
         msg = AgentSeerInspect(target="Team0")  # Team0 is a wolf
-        result = engine._handle_night_message("Team2", msg)
+        result = await engine._handle_night_message("Team2", msg)
         assert result is True
         # Should have sent a SeerResultMessage
         engine.ws.send.assert_called()
@@ -193,7 +193,7 @@ class TestSeerInspect:
 
         msg = AgentSeerInspect(target="Team3")
         # Team1 is a villager, not a seer
-        result = engine._handle_night_message("Team1", msg)
+        result = await engine._handle_night_message("Team1", msg)
         assert result is False
 
     async def test_inspect_dead_player_rejected(self):
@@ -203,7 +203,7 @@ class TestSeerInspect:
         engine.state.phase = Phase.NIGHT
 
         msg = AgentSeerInspect(target="Team3")
-        result = engine._handle_night_message("Team2", msg)
+        result = await engine._handle_night_message("Team2", msg)
         assert result is False
 
     async def test_inspect_self_rejected(self):
@@ -212,7 +212,7 @@ class TestSeerInspect:
         engine.state.phase = Phase.NIGHT
 
         msg = AgentSeerInspect(target="Team2")
-        result = engine._handle_night_message("Team2", msg)
+        result = await engine._handle_night_message("Team2", msg)
         assert result is False
 
     async def test_only_one_inspect_per_night(self):
@@ -221,11 +221,11 @@ class TestSeerInspect:
         engine.state.phase = Phase.NIGHT
 
         msg1 = AgentSeerInspect(target="Team3")
-        result1 = engine._handle_night_message("Team2", msg1)
+        result1 = await engine._handle_night_message("Team2", msg1)
         assert result1 is True
 
         msg2 = AgentSeerInspect(target="Team4")
-        result2 = engine._handle_night_message("Team2", msg2)
+        result2 = await engine._handle_night_message("Team2", msg2)
         assert result2 is False
 
     def test_seer_counts_as_villager_for_win(self):
@@ -276,7 +276,7 @@ class TestGuardProtect:
 
         # Guard protects Team3
         msg = AgentGuardProtect(target="Team3")
-        result = engine._handle_night_message("Team2", msg)
+        result = await engine._handle_night_message("Team2", msg)
         assert result is True
         assert engine._guard_protected == "Team3"
 
@@ -293,7 +293,7 @@ class TestGuardProtect:
         engine._guard_last_protected = "Team3"
 
         msg = AgentGuardProtect(target="Team3")
-        result = engine._handle_night_message("Team2", msg)
+        result = await engine._handle_night_message("Team2", msg)
         assert result is False
 
     async def test_guard_can_protect_self(self):
@@ -302,7 +302,7 @@ class TestGuardProtect:
         engine.state.phase = Phase.NIGHT
 
         msg = AgentGuardProtect(target="Team2")
-        result = engine._handle_night_message("Team2", msg)
+        result = await engine._handle_night_message("Team2", msg)
         assert result is True
 
     async def test_only_guard_can_protect(self):
@@ -311,7 +311,7 @@ class TestGuardProtect:
 
         msg = AgentGuardProtect(target="Team3")
         # Team1 is a villager, not the guard
-        result = engine._handle_night_message("Team1", msg)
+        result = await engine._handle_night_message("Team1", msg)
         assert result is False
 
     async def test_guard_only_once_per_night(self):
@@ -320,11 +320,11 @@ class TestGuardProtect:
         engine.state.phase = Phase.NIGHT
 
         msg1 = AgentGuardProtect(target="Team3")
-        result1 = engine._handle_night_message("Team2", msg1)
+        result1 = await engine._handle_night_message("Team2", msg1)
         assert result1 is True
 
         msg2 = AgentGuardProtect(target="Team4")
-        result2 = engine._handle_night_message("Team2", msg2)
+        result2 = await engine._handle_night_message("Team2", msg2)
         assert result2 is False
 
     async def test_guard_save_morning_announcement(self, override_settings):

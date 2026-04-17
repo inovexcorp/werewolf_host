@@ -32,29 +32,27 @@ class NightMessageHandler:
     def __init__(self, engine: "GameEngine"):
         self.engine = engine
 
-    def handle(self, agent_id: str, msg) -> bool:
+    async def handle(self, agent_id: str, msg) -> bool:
         player = self.engine.state.players.get(agent_id)
         if not player or not player.alive:
             return False
 
         if isinstance(msg, AgentNightVote):
-            return self._handle_night_vote(agent_id, player, msg)
+            return await self._handle_night_vote(agent_id, player, msg)
         if isinstance(msg, AgentWolfChat):
-            return self._handle_wolf_chat(agent_id, player, msg)
+            return await self._handle_wolf_chat(agent_id, player, msg)
         if isinstance(msg, AgentGuardProtect):
-            return self._handle_guard_protect(agent_id, player, msg)
+            return await self._handle_guard_protect(agent_id, player, msg)
         if isinstance(msg, AgentSeerInspect):
-            return self._handle_seer_inspect(agent_id, player, msg)
+            return await self._handle_seer_inspect(agent_id, player, msg)
         if isinstance(msg, AgentTypingIndicator):
-            return self._handle_typing(agent_id, player, msg)
+            return await self._handle_typing(agent_id, player, msg)
         return False
 
-    def _send_error(self, agent_id: str, code: str, message: str) -> None:
-        self.engine._fire_and_forget(
-            self.engine.ws.send(agent_id, ErrorMessage(code=code, message=message))
-        )
+    async def _send_error(self, agent_id: str, code: str, message: str) -> None:
+        await self.engine.ws.send(agent_id, ErrorMessage(code=code, message=message))
 
-    def _handle_night_vote(
+    async def _handle_night_vote(
         self, agent_id: str, player: Player, msg: AgentNightVote
     ) -> bool:
         state = self.engine.state
@@ -64,23 +62,23 @@ class NightMessageHandler:
                 agent_id,
                 player.role,
             )
-            self._send_error(
+            await self._send_error(
                 agent_id, "NOT_ALLOWED", "You are not allowed to perform that action."
             )
             return False
         if msg.target not in state.alive_player_ids or msg.target == agent_id:
-            self._send_error(agent_id, "INVALID_TARGET", "Invalid target.")
+            await self._send_error(agent_id, "INVALID_TARGET", "Invalid target.")
             return False
         target = state.players.get(msg.target)
         if target and target.role == Role.WEREWOLF:
-            self._send_error(
+            await self._send_error(
                 agent_id, "INVALID_TARGET", "Cannot target a fellow werewolf."
             )
             return False
         state.night_votes[agent_id] = msg.target
         return True
 
-    def _handle_wolf_chat(
+    async def _handle_wolf_chat(
         self, agent_id: str, player: Player, msg: AgentWolfChat
     ) -> bool:
         state = self.engine.state
@@ -90,7 +88,7 @@ class NightMessageHandler:
                 agent_id,
                 player.role,
             )
-            self._send_error(
+            await self._send_error(
                 agent_id, "NOT_ALLOWED", "You are not allowed to perform that action."
             )
             return False
@@ -119,7 +117,7 @@ class NightMessageHandler:
         )
         return True
 
-    def _handle_guard_protect(
+    async def _handle_guard_protect(
         self, agent_id: str, player: Player, msg: AgentGuardProtect
     ) -> bool:
         state = self.engine.state
@@ -129,32 +127,30 @@ class NightMessageHandler:
                 agent_id,
                 player.role,
             )
-            self._send_error(
+            await self._send_error(
                 agent_id, "NOT_ALLOWED", "You are not allowed to perform that action."
             )
             return False
         if self.engine._guard_acted:
-            self._send_error(
+            await self._send_error(
                 agent_id,
                 "ALREADY_PROTECTED",
                 "You have already protected someone this night.",
             )
             return False
         if msg.target not in state.alive_player_ids:
-            self._send_error(agent_id, "INVALID_TARGET", "Invalid target.")
+            await self._send_error(agent_id, "INVALID_TARGET", "Invalid target.")
             return False
         if msg.target == self.engine._guard_last_protected:
-            self._send_error(
+            await self._send_error(
                 agent_id, "SAME_TARGET", "Cannot protect the same player twice."
             )
             return False
 
         self.engine._guard_protected = msg.target
         self.engine._guard_acted = True
-        self.engine._fire_and_forget(
-            self.engine.ws.send(
-                agent_id, GuardResultMessage(target=msg.target, protected=True)
-            )
+        await self.engine.ws.send(
+            agent_id, GuardResultMessage(target=msg.target, protected=True)
         )
         self.engine._fire_and_forget(
             self.engine._publish(
@@ -177,7 +173,7 @@ class NightMessageHandler:
         )
         return True
 
-    def _handle_seer_inspect(
+    async def _handle_seer_inspect(
         self, agent_id: str, player: Player, msg: AgentSeerInspect
     ) -> bool:
         state = self.engine.state
@@ -187,28 +183,26 @@ class NightMessageHandler:
                 agent_id,
                 player.role,
             )
-            self._send_error(
+            await self._send_error(
                 agent_id, "NOT_ALLOWED", "You are not allowed to perform that action."
             )
             return False
         if self.engine._seer_inspected:
-            self._send_error(
+            await self._send_error(
                 agent_id,
                 "ALREADY_INSPECTED",
                 "You have already inspected someone this night.",
             )
             return False
         if msg.target not in state.alive_player_ids or msg.target == agent_id:
-            self._send_error(agent_id, "INVALID_TARGET", "Invalid target.")
+            await self._send_error(agent_id, "INVALID_TARGET", "Invalid target.")
             return False
 
         target_player = state.players[msg.target]
         self.engine._seer_inspected = True
-        self.engine._fire_and_forget(
-            self.engine.ws.send(
-                agent_id,
-                SeerResultMessage(target=msg.target, role=target_player.role.value),
-            )
+        await self.engine.ws.send(
+            agent_id,
+            SeerResultMessage(target=msg.target, role=target_player.role.value),
         )
         self.engine._fire_and_forget(
             self.engine._publish(
@@ -232,7 +226,7 @@ class NightMessageHandler:
         )
         return True
 
-    def _handle_typing(
+    async def _handle_typing(
         self, agent_id: str, player: Player, msg: AgentTypingIndicator
     ) -> bool:
         if player.role == Role.WEREWOLF:

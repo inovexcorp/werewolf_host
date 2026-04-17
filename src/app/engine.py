@@ -27,6 +27,14 @@ logger = logging.getLogger(__name__)
 NARRATOR_ID = "narrator"
 
 
+def _log_task_exception(task: asyncio.Task) -> None:
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error("Background task failed", exc_info=exc)
+
+
 class GameEngine:
     def __init__(
         self,
@@ -60,6 +68,7 @@ class GameEngine:
         task = asyncio.create_task(coro)
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
+        task.add_done_callback(_log_task_exception)
 
     # ------------------------------------------------------------------
     # Public API
@@ -188,8 +197,8 @@ class GameEngine:
     async def _night_phase(self):
         await phases.run_night_phase(self)
 
-    def _handle_night_message(self, agent_id: str, msg) -> bool:
-        return self._night_handler.handle(agent_id, msg)
+    async def _handle_night_message(self, agent_id: str, msg) -> bool:
+        return await self._night_handler.handle(agent_id, msg)
 
     def _resolve_night_votes(self) -> tuple[Player | None, bool, str | None]:
         """Resolve night votes. Returns (victim, was_guarded, saved_player_id)."""
@@ -282,7 +291,7 @@ class GameEngine:
                 break
             try:
                 agent_id, msg = await self.ws.get_next_message(timeout=remaining)
-                allowed_handler(agent_id, msg)
+                await allowed_handler(agent_id, msg)
             except TimeoutError:
                 break
             except Exception:
