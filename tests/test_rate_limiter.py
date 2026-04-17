@@ -40,6 +40,21 @@ class TestRateLimiter:
         # Still at t=0 → within cooldown
         assert self.rl.check_chat_message("g1", "a1", "m2") == "RATE_LIMITED"
 
+    def test_clear_for_game_removes_only_that_games_entries(self):
+        self.rl.reset_for_phase("g1", ["a1", "a2"])
+        self.rl.reset_for_phase("g2", ["a1"])
+        assert len(self.rl._counters) == 3
+
+        self.rl.clear_for_game("g1")
+        assert len(self.rl._counters) == 1
+        assert self.rl.check_chat_message("g1", "a1", "hi") == "NOT_IN_DISCUSSION"
+        assert self.rl.check_chat_message("g2", "a1", "hi") is None
+
+    def test_clear_for_game_missing_id_is_noop(self):
+        self.rl.reset_for_phase("g1", ["a1"])
+        self.rl.clear_for_game("nonexistent")
+        assert self.rl.check_chat_message("g1", "a1", "hi") is None
+
     def test_cooldown_expires(self, override_settings, monkeypatch):
         override_settings(message_cooldown_seconds=3.0)
         import time

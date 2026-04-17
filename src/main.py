@@ -19,6 +19,7 @@ from app.config import settings
 from app.engine import GameEngine
 from app.models.game import Player
 from app.narrator import Narrator
+from app.rate_limiter import rate_limiter
 from app.redis import close_redis, get_redis, publish_event
 from app.spectator import series_spectator_stream, spectator_stream
 from app.ws_manager import (
@@ -525,6 +526,7 @@ async def _start_game_internal(game_id: str, engine: GameEngine) -> asyncio.Task
             logger.exception("Game %s crashed", game_id)
         finally:
             _game_tasks.pop(game_id, None)
+            rate_limiter.clear_for_game(game_id)
 
     task = asyncio.create_task(_run_game())
     _game_tasks[game_id] = task

@@ -31,6 +31,12 @@ class RateLimiter:
                 else settings.message_cooldown_seconds,
             }
 
+    def clear_for_game(self, game_id: str) -> None:
+        """Drop all counters for a finished game to prevent unbounded growth."""
+        stale = [key for key in self._counters if key[0] == game_id]
+        for key in stale:
+            del self._counters[key]
+
     def check_chat_message(
         self, game_id: str, agent_id: str, message: str
     ) -> str | None:
