@@ -156,3 +156,48 @@ class TestListenLoop:
         mgr = ConnectionManager()
         await mgr._listen_loop("missing")
         # Should just return without error
+
+    async def test_muted_agent_messages_dropped(self):
+        mgr = ConnectionManager()
+        mgr._muted.add("a1")
+        valid_msg = json.dumps({"type": "chat_message", "message": "spam"})
+
+        mock_ws = AsyncMock()
+        mock_ws.receive_text = AsyncMock(
+            side_effect=[valid_msg, valid_msg, WebSocketDisconnect()]
+        )
+        mgr._connections["a1"] = mock_ws
+
+        await mgr._listen_loop("a1")
+
+        assert mgr._message_queue.empty()
+
+
+class TestMute:
+    async def test_mute_adds_to_muted_set(self):
+        mgr = ConnectionManager()
+        mgr.mute("a1")
+        assert "a1" in mgr._muted
+
+    async def test_mute_purges_queued_messages_from_agent(self):
+        mgr = ConnectionManager()
+        await mgr._message_queue.put(("a1", AgentChatMessage(message="m1")))
+        await mgr._message_queue.put(("a2", AgentChatMessage(message="m2")))
+        await mgr._message_queue.put(("a1", AgentChatMessage(message="m3")))
+        await mgr._message_queue.put(("a2", AgentChatMessage(message="m4")))
+
+        mgr.mute("a1")
+
+        drained = mgr.drain_messages()
+        assert [aid for aid, _ in drained] == ["a2", "a2"]
+        assert [msg.message for _, msg in drained] == ["m2", "m4"]
+
+    async def test_disconnect_clears_muted_entry(self):
+        mgr = ConnectionManager()
+        mgr._muted.add("a1")
+        mock_ws = AsyncMock()
+        mgr._connections["a1"] = mock_ws
+
+        await mgr.disconnect("a1")
+
+        assert "a1" not in mgr._muted

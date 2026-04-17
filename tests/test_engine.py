@@ -343,6 +343,30 @@ class TestGuardProtect:
         assert all(p.alive for p in engine.state.players.values())
 
 
+class TestEliminationMutesAgent:
+    async def test_morning_announcement_mutes_victim(self, override_settings):
+        override_settings(morning_announcement_pause=0, openai_api_key="")
+        engine = _make_engine(player_count=6, wolf_count=1)
+        engine.state.round = 1
+        victim = engine.state.players["Team3"]
+
+        with patch.object(engine, "_publish", new=AsyncMock()):
+            await engine._morning_announcement(victim=victim)
+
+        engine.ws.mute.assert_called_once_with("Team3")
+
+    async def test_banishment_reveal_mutes_banished(self, override_settings):
+        override_settings(banishment_reveal_pause=0, openai_api_key="")
+        engine = _make_engine(player_count=6, wolf_count=1)
+        engine.state.round = 1
+        banished = engine.state.players["Team4"]
+
+        with patch.object(engine, "_publish", new=AsyncMock()):
+            await engine._banishment_reveal(banished=banished)
+
+        engine.ws.mute.assert_called_once_with("Team4")
+
+
 class TestSmokeRun:
     async def test_abbreviated_game_to_completion(self, override_settings):
         override_settings(

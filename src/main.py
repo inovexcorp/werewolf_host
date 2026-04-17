@@ -115,9 +115,9 @@ async def lifespan(app: FastAPI):
 
     yield
     # Shutdown
-    for task in _series_tasks.values():
+    for task in list(_series_tasks.values()):
         task.cancel()
-    for task in _game_tasks.values():
+    for task in list(_game_tasks.values()):
         task.cancel()
     await close_redis()
 
@@ -226,7 +226,7 @@ async def register_team(req: RegisterRequest, request: Request):
             raise HTTPException(403, "Re-registration requires valid existing token")
 
         # Block if team is in an active game
-        for game_id, engine in _games.items():
+        for game_id, engine in list(_games.items()):
             if game_id in _game_tasks and req.team_name in engine.state.players:
                 raise HTTPException(409, "Cannot re-register while in an active game")
 
@@ -585,7 +585,7 @@ async def start_game(
 async def list_games():
     """List all games (active first), including phase, player counts, and winner."""
     games = []
-    for game_id, engine in _games.items():
+    for game_id, engine in list(_games.items()):
         s = engine.state
         games.append(
             {

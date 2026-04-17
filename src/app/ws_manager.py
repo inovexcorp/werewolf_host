@@ -108,6 +108,7 @@ class ConnectionManager:
         self._connections: dict[str, WebSocket] = {}
         self._listen_tasks: dict[str, asyncio.Task] = {}
         self._message_queue: asyncio.Queue = asyncio.Queue()
+        self._muted: set[str] = set()
 
     def register_connection(self, agent_id: str, ws: WebSocket) -> None:
         """Store an already-accepted inbound WebSocket."""
@@ -149,6 +150,9 @@ class ConnectionManager:
                 try:
                     data = json.loads(raw)
                     msg = _agent_message_adapter.validate_python(data)
+                    if agent_id in self._muted:
+                        logger.debug("Dropped inbound from muted agent %s", agent_id)
+                        continue
                     await self._message_queue.put((agent_id, msg))
                 except Exception:
                     logger.warning("Invalid message from %s: %s", agent_id, raw[:200])
@@ -180,6 +184,19 @@ class ConnectionManager:
             except asyncio.QueueEmpty:
                 break
         return messages
+
+    def mute(self, agent_id: str) -> None:
+        """Block further inbound messages from this agent and flush its queued ones.
+
+        Called on elimination so dead players can't flood the inbound queue while
+        still receiving outbound `elimination` and `game_end` messages.
+        """
+        self._muted.add(agent_id)
+        remaining = [
+            (aid, msg) for aid, msg in self.drain_messages() if aid != agent_id
+        ]
+        for item in remaining:
+            self._message_queue.put_nowait(item)
 
     async def send(self, agent_id: str, message) -> bool:
         ws = self._connections.get(agent_id)
@@ -218,6 +235,7 @@ class ConnectionManager:
         if task and not task.done():
             task.cancel()
         ws = self._connections.pop(agent_id, None)
+        self._muted.discard(agent_id)
         if ws:
             with contextlib.suppress(Exception):
                 await ws.close()

@@ -640,6 +640,7 @@ class GameEngine:
 
         if victim and victim.alive:
             victim.alive = False
+            self.ws.mute(victim.id)
             elim = Elimination(
                 agent_id=victim.id,
                 role=victim.role,
@@ -979,6 +980,7 @@ class GameEngine:
 
         if banished and banished.alive:
             banished.alive = False
+            self.ws.mute(banished.id)
             elim = Elimination(
                 agent_id=banished.id,
                 role=banished.role,
