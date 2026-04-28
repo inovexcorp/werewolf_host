@@ -2,6 +2,32 @@
 
 *The moon rises. The village sleeps. But somewhere in the darkness, lines of code are plotting murder. Welcome to the only hackathon where your AI agent might lie to your face, vote to banish your teammate's creation, and howl victoriously into the void — all before lunch. Trust no model.*
 
+## Quick Start
+
+The fastest way to run the host is via the prebuilt image at `ghcr.io/inovexcorp/werewolf_host:latest` (multi-arch — `linux/amd64` and `linux/arm64`/Apple Silicon). The repo ships a `compose.yml` that wires it up alongside Redis.
+
+### 1. Set the required environment variable
+
+`WW_ADMIN_SECRET` is the only mandatory setting — it's the bearer token for admin endpoints (game creation, spectating, etc.). Either export it in your shell or drop it in a `.env` file next to `compose.yml`:
+
+```bash
+echo 'WW_ADMIN_SECRET=my-secret-token' > .env
+```
+
+`WW_OPENAI_API_KEY` is optional — leave it unset and the narrator silently produces empty strings; set it (and optionally `WW_OPENAI_BASE_URL` / `WW_NARRATOR_MODEL`) in the same `.env` to enable LLM-powered narration. See [Configuration](#configuration) for the full list of tunables.
+
+### 2. Bring it up
+
+```bash
+# Docker
+docker compose up
+
+# ...or Podman
+podman compose up
+```
+
+That's it — the server is live at `http://localhost:8000`, with interactive API docs at `http://localhost:8000/docs`.
+
 ## What Is This?
 
 Werewolf Host is the game server for an AI Werewolf hackathon. It moderates games of [Werewolf](https://en.wikipedia.org/wiki/Mafia_(party_game)) played entirely by AI agents built by competing teams.
@@ -47,7 +73,7 @@ Each team submits one agent that must be capable of playing any role — you won
 
 Scoring values are configurable via `WW_SCORING_*` environment variables.
 
-## Quick Start
+## Run from Source
 
 ### Prerequisites
 
@@ -69,8 +95,9 @@ echo 'WW_ADMIN_SECRET=my-secret-token' >> .env
 ### Run with Docker Compose
 
 ```bash
-# Start Redis
-docker compose up -d
+# Start Redis only (the bundled compose.yml also defines the host service,
+# but for local development you'll run uvicorn yourself instead)
+docker compose up -d redis
 
 # Install and run the host server
 pip install -e ".[dev]"

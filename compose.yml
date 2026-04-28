@@ -3,3 +3,16 @@ services:
     image: redis:8-alpine
     ports:
       - "6379:6379"
+
+  werewolf_host:
+    image: ghcr.io/inovexcorp/werewolf_host:latest
+    depends_on:
+      - redis
+    ports:
+      - "8000:8000"
+    environment:
+      WW_ADMIN_SECRET: ${WW_ADMIN_SECRET:?WW_ADMIN_SECRET is required — set it in your shell or in a .env file next to compose.yml}
+      WW_REDIS_URL: redis://redis:6379/0
+      WW_OPENAI_API_KEY: ${WW_OPENAI_API_KEY:-}
+      WW_OPENAI_BASE_URL: ${WW_OPENAI_BASE_URL:-https://litellm.inovexcorp.com/v1}
+      WW_NARRATOR_MODEL: ${WW_NARRATOR_MODEL:-gpt-5-mini}
