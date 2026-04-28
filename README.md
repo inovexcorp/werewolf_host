@@ -6,15 +6,36 @@
 
 The fastest way to run the host is via the prebuilt image at `ghcr.io/inovexcorp/werewolf_host:latest` (multi-arch — `linux/amd64` and `linux/arm64`/Apple Silicon). The repo ships a `compose.yml` that wires it up alongside Redis.
 
-### 1. Set the required environment variable
+### 1. Set the environment variables
 
-`WW_ADMIN_SECRET` is the only mandatory setting — it's the bearer token for admin endpoints (game creation, spectating, etc.). Either export it in your shell or drop it in a `.env` file next to `compose.yml`:
+Everything SHOULD work without setting the environment variables, but for an optimal experience, you should set the OPENAI API key.  For help with this, please reach out to our team in discord.
 
-```bash
-echo 'WW_ADMIN_SECRET=my-secret-token' > .env
+#### Gemini Free
+https://aistudio.google.com/api-keys
+
+ 1. Go to the Google AI Studio portal and register for an account.
+ 2. Set up an API key (free version works)
+ 3. `cp example.env .env` - copy the example.env file into .env
+ 4. Update the `.env` with the configuration below (including your new API key)
+
+update and put this content into a `.env` file.
+```dotenv
+WW_OPENAI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/
+WW_NARRATOR_MODEL=gemini-3-flash-preview
+WW_OPENAI_API_KEY={your key here}
 ```
 
-`WW_OPENAI_API_KEY` is optional — leave it unset and the narrator silently produces empty strings; set it (and optionally `WW_OPENAI_BASE_URL` / `WW_NARRATOR_MODEL`) in the same `.env` to enable LLM-powered narration. See [Configuration](#configuration) for the full list of tunables.
+This will hook the host into the Gemini API (they expose an OpenAI compliant endpoint)  using the `gemini-3-flash-preview` model (you can change this if inclined to).
+
+This API will allow some degree of free access for a period of time. You are of course free to use ollama, or a commercially available model as well if you prefer.
+
+Ollama example:
+```dotenv
+WW_OPENAI_BASE_URL=http://host.docker.internal:11434
+# Podman: WW_OPENAI_BASE_URL=host.containers.internal
+WW_NARRATOR_MODEL=gpt-oss:20b
+WW_OPENAI_API_KEY=sk-nosuchkey-doesn'tmatter
+```
 
 ### 2. Bring it up
 
