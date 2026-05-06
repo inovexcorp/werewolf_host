@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import json
 import logging
 import secrets
@@ -13,6 +14,7 @@ from fastapi import WebSocket as FastAPIWebSocket
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from starlette.websockets import WebSocketDisconnect
 
 from app.avatar import default_avatar_path, ensure_avatar_dir, process_avatar
 from app.config import settings
@@ -25,7 +27,10 @@ from app.spectator import series_spectator_stream, spectator_stream
 from app.ws_manager import (
     agent_connected,
     agent_disconnected,
+    clear_pending,
     create_close_event,
+    create_handoff_event,
+    disconnect_team,
     get_connected_agents,
 )
 
@@ -231,6 +236,8 @@ async def register_team(req: RegisterRequest, request: Request):
                 raise HTTPException(409, "Cannot re-register while in an active game")
 
         await r.hdel("team_tokens", old_token)
+        # Close any stale pre-game socket so the agent can reconnect with the new token
+        await disconnect_team(req.team_name, reason="Re-registered")
 
     token = secrets.token_urlsafe(32)
     await r.hset("teams", req.team_name, token)
@@ -282,6 +289,7 @@ async def list_teams():
     responses={
         403: {"description": "Invalid or missing admin secret"},
         404: {"description": team_not_found},
+        409: {"description": "Cannot unregister while in an active game"},
     },
 )
 async def unregister_team(
@@ -291,12 +299,57 @@ async def unregister_team(
     """Remove a team from the registry. Requires admin auth."""
     r = await get_redis()
     old_token = await r.hget("teams", team_name)
-    removed = await r.hdel("teams", team_name)
-    if not removed:
+    if old_token is None:
         raise HTTPException(404, team_not_found)
-    if old_token:
-        await r.hdel("team_tokens", old_token)
+
+    for game_id, engine in list(_games.items()):
+        if game_id in _game_tasks and team_name in engine.state.players:
+            raise HTTPException(409, "Cannot unregister while in an active game")
+
+    await r.hdel("teams", team_name)
+    await r.hdel("team_tokens", old_token)
+    await r.hdel("team_avatars", team_name)
+    await disconnect_team(team_name)
     return {"status": "removed"}
+
+
+@app.post(
+    "/admin/reset",
+    responses={
+        403: {"description": "Invalid or missing admin secret"},
+    },
+)
+async def admin_reset(_: Annotated[None, Depends(_require_admin_secret)]):
+    """Force-stop all games, disconnect all agents, and wipe Redis.
+
+    Returns the host to a clean slate. Always succeeds — running games are
+    cancelled rather than blocking the reset.
+    """
+    # Cancel running game and series tasks
+    all_tasks = (*_game_tasks.values(), *_series_tasks.values())
+    tasks = [t for t in all_tasks if not t.done()]
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+    _game_tasks.clear()
+    _series_tasks.clear()
+    _games.clear()
+
+    # Disconnect any pre-game agents still holding sockets
+    for team_name in list(get_connected_agents()):
+        await disconnect_team(team_name, reason="Host reset")
+    clear_pending()
+
+    # Drop in-memory rate-limit counters tied to the wiped game IDs
+    rate_limiter._counters.clear()
+
+    # Wipe the host's Redis DB
+    r = await get_redis()
+    await r.flushdb()
+
+    logger.info("Host reset: cancelled %d task(s), wiped Redis", len(tasks))
+    return {"status": "ok"}
 
 
 # ---------------------------------------------------------------------------
@@ -404,6 +457,39 @@ async def team_stats(team_name: str):
 # ---------------------------------------------------------------------------
 
 
+async def _drain_until_handoff(
+    websocket: FastAPIWebSocket, handoff_event: asyncio.Event
+) -> None:
+    """Read and discard inbound frames until the listen-loop takes over.
+
+    Pre-game we must actively call `receive()` so a client disconnect surfaces
+    as `WebSocketDisconnect`. Once `ConnectionManager.register_connection`
+    fires `handoff_event`, we stop reading so the listen loop can be the sole
+    reader (Starlette permits only one concurrent receiver per socket).
+    """
+    receive_task: asyncio.Task = asyncio.create_task(websocket.receive())
+    handoff_task: asyncio.Task = asyncio.create_task(handoff_event.wait())
+    try:
+        while True:
+            done, _ = await asyncio.wait(
+                {receive_task, handoff_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if handoff_task in done:
+                receive_task.cancel()
+                with contextlib.suppress(BaseException):
+                    await receive_task
+                return
+            msg = receive_task.result()
+            if msg.get("type") == "websocket.disconnect":
+                raise WebSocketDisconnect(code=msg.get("code", 1006))
+            # Pre-game frames are unexpected; drop silently and keep reading.
+            receive_task = asyncio.create_task(websocket.receive())
+    finally:
+        if not handoff_task.done():
+            handoff_task.cancel()
+
+
 @app.websocket("/ws/agent")
 async def agent_ws_endpoint(websocket: FastAPIWebSocket):
     """Accept an inbound WebSocket from an AI agent.
@@ -437,10 +523,16 @@ async def agent_ws_endpoint(websocket: FastAPIWebSocket):
 
     logger.info("Agent %s connected via WebSocket", team_name)
     close_event = create_close_event(team_name)
+    handoff_event = create_handoff_event(team_name)
     try:
-        # Don't read from the socket here — _listen_loop in ConnectionManager
-        # is the sole reader.  Just keep the endpoint alive until signalled.
+        # Pre-game: drain frames so a client disconnect updates _connected_agents
+        # right away. Returns cleanly once register_connection signals handoff.
+        await _drain_until_handoff(websocket, handoff_event)
+        # Post-handoff: ConnectionManager._listen_loop is the reader; park here
+        # until it sees a disconnect or game shutdown calls signal_close.
         await close_event.wait()
+    except WebSocketDisconnect:
+        logger.info("Agent %s disconnected (pre-game)", team_name)
     except Exception:
         logger.exception("Agent %s WebSocket error", team_name)
     finally:

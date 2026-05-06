@@ -26,6 +26,7 @@ _pending_connections: dict[str, WebSocket] = {}
 _connect_events: dict[str, asyncio.Event] = {}
 _connected_agents: set[str] = set()
 _close_events: dict[str, asyncio.Event] = {}
+_handoff_events: dict[str, asyncio.Event] = {}
 
 
 def clear_pending() -> None:
@@ -34,6 +35,7 @@ def clear_pending() -> None:
     _connect_events.clear()
     _connected_agents.clear()
     _close_events.clear()
+    _handoff_events.clear()
 
 
 def create_close_event(agent_id: str) -> asyncio.Event:
@@ -46,6 +48,26 @@ def create_close_event(agent_id: str) -> asyncio.Event:
 def signal_close(agent_id: str) -> None:
     """Signal the WS endpoint to exit cleanly."""
     event = _close_events.pop(agent_id, None)
+    if event:
+        event.set()
+
+
+def create_handoff_event(agent_id: str) -> asyncio.Event:
+    """Create an event the WS endpoint awaits while it is the socket's reader.
+
+    Pre-game, the endpoint actively drains inbound frames so disconnects surface
+    immediately. When a game starts and `ConnectionManager.register_connection`
+    takes ownership of reading, it signals this event so the endpoint stops
+    competing for `receive()` (Starlette allows only one concurrent reader).
+    """
+    event = asyncio.Event()
+    _handoff_events[agent_id] = event
+    return event
+
+
+def signal_handoff(agent_id: str) -> None:
+    """Signal the WS endpoint that another reader has taken over."""
+    event = _handoff_events.pop(agent_id, None)
     if event:
         event.set()
 
@@ -76,6 +98,27 @@ def agent_disconnected(agent_id: str) -> None:
 def get_connected_agents() -> set[str]:
     """Return a copy of the currently connected agent IDs."""
     return set(_connected_agents)
+
+
+async def disconnect_team(
+    agent_id: str,
+    code: int = 4003,
+    reason: str = "Team unregistered",
+) -> bool:
+    """Force-close any pre-game WebSocket for a team being unregistered.
+
+    Returns True if a pending socket was found and closed.
+    """
+    ws = _pending_connections.pop(agent_id, None)
+    _connected_agents.discard(agent_id)
+    _connect_events.pop(agent_id, None)
+    _handoff_events.pop(agent_id, None)
+    signal_close(agent_id)
+    if ws is None:
+        return False
+    with contextlib.suppress(Exception):
+        await ws.close(code=code, reason=reason)
+    return True
 
 
 def expect_agent(agent_id: str) -> None:
@@ -113,6 +156,7 @@ class ConnectionManager:
     def register_connection(self, agent_id: str, ws: WebSocket) -> None:
         """Store an already-accepted inbound WebSocket."""
         self._connections[agent_id] = ws
+        signal_handoff(agent_id)
         logger.info("Registered inbound connection for agent %s", agent_id)
 
     async def wait_for_connections(

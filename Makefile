@@ -40,4 +40,5 @@ run_container: container
 	$(ENGINE) run -p 8000:8000 --rm --name werewolf_host_local $(IMAGE)
 
 run: build
-	uvicorn main:app --host 0.0.0.0 --port 8000 --env-file .env
+	uvicorn main:app --host 0.0.0.0 --port 8000 --env-file .env \
+		--ws-ping-interval 10 --ws-ping-timeout 10

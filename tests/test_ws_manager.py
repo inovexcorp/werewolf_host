@@ -8,10 +8,14 @@ from starlette.websockets import WebSocketDisconnect
 from app.models.messages import AgentChatMessage, ErrorMessage
 from app.ws_manager import (
     ConnectionManager,
+    _handoff_events,
     _pending_connections,
     agent_connected,
     agent_disconnected,
+    clear_pending,
+    create_handoff_event,
     get_connected_agents,
+    signal_handoff,
 )
 
 
@@ -171,6 +175,31 @@ class TestListenLoop:
         await mgr._listen_loop("a1")
 
         assert mgr._message_queue.empty()
+
+
+class TestHandoff:
+    async def test_register_connection_signals_handoff(self):
+        mgr = ConnectionManager()
+        event = create_handoff_event("a1")
+        assert not event.is_set()
+
+        mgr.register_connection("a1", AsyncMock())
+
+        assert event.is_set()
+        # signal_handoff pops the event from the registry on fire.
+        assert "a1" not in _handoff_events
+
+    async def test_signal_handoff_unknown_agent_is_safe(self):
+        signal_handoff("nonexistent")  # no error, no event to set
+
+    async def test_clear_pending_resets_handoff_events(self):
+        create_handoff_event("a1")
+        create_handoff_event("a2")
+        assert {"a1", "a2"} <= set(_handoff_events.keys())
+
+        clear_pending()
+
+        assert _handoff_events == {}
 
 
 class TestMute:
