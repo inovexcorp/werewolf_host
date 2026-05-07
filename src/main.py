@@ -264,8 +264,11 @@ async def register_team(req: RegisterRequest, request: Request):
     }
 
 
-@app.get("/teams")
-async def list_teams():
+@app.get(
+    "/teams",
+    responses={403: {"description": "Invalid or missing admin secret"}},
+)
+async def list_teams(_: Annotated[None, Depends(_require_admin_secret)]):
     """Return all registered teams with their avatar URLs and connection status."""
     r = await get_redis()
     teams = await r.hgetall("teams")
@@ -311,6 +314,17 @@ async def unregister_team(
     await r.hdel("team_avatars", team_name)
     await disconnect_team(team_name)
     return {"status": "removed"}
+
+
+@app.post(
+    "/admin/verify",
+    responses={
+        403: {"description": "Invalid or missing admin secret"},
+    },
+)
+async def admin_verify(_: Annotated[None, Depends(_require_admin_secret)]):
+    """Side-effect-free probe used by the spectator UI to validate the admin secret."""
+    return {"status": "ok"}
 
 
 @app.post(
@@ -380,9 +394,15 @@ async def health_check():
 
 @app.get(
     "/teams/{team_name}/status",
-    responses={404: {"description": team_not_found}},
+    responses={
+        403: {"description": "Invalid or missing admin secret"},
+        404: {"description": team_not_found},
+    },
 )
-async def team_status(team_name: str):
+async def team_status(
+    team_name: str,
+    _: Annotated[None, Depends(_require_admin_secret)],
+):
     """Return registration and connection status for a single team."""
     r = await get_redis()
     token = await r.hget("teams", team_name)
@@ -408,9 +428,15 @@ async def team_status(team_name: str):
 
 @app.get(
     "/teams/{team_name}/stats",
-    responses={404: {"description": team_not_found}},
+    responses={
+        403: {"description": "Invalid or missing admin secret"},
+        404: {"description": team_not_found},
+    },
 )
-async def team_stats(team_name: str):
+async def team_stats(
+    team_name: str,
+    _: Annotated[None, Depends(_require_admin_secret)],
+):
     """Return aggregate stats for a team: rank, win/loss, role history."""
     r = await get_redis()
     token = await r.hget("teams", team_name)
@@ -673,8 +699,11 @@ async def start_game(
     return {"game_id": game_id, "status": "started"}
 
 
-@app.get("/games")
-async def list_games():
+@app.get(
+    "/games",
+    responses={403: {"description": "Invalid or missing admin secret"}},
+)
+async def list_games(_: Annotated[None, Depends(_require_admin_secret)]):
     """List all games (active first), including phase, player counts, and winner."""
     games = []
     for game_id, engine in list(_games.items()):
@@ -695,8 +724,17 @@ async def list_games():
     return {"games": games}
 
 
-@app.get("/games/{game_id}", responses={404: {"description": game_not_found}})
-async def get_game_status(game_id: str) -> GameStatusResponse:
+@app.get(
+    "/games/{game_id}",
+    responses={
+        403: {"description": "Invalid or missing admin secret"},
+        404: {"description": game_not_found},
+    },
+)
+async def get_game_status(
+    game_id: str,
+    _: Annotated[None, Depends(_require_admin_secret)],
+) -> GameStatusResponse:
     """Return current game status: phase, round, alive players, winner."""
     engine = _games.get(game_id)
     if not engine:
@@ -892,8 +930,17 @@ async def create_series(
     }
 
 
-@app.get("/series/{series_id}")
-async def get_series(series_id: str):
+@app.get(
+    "/series/{series_id}",
+    responses={
+        403: {"description": "Invalid or missing admin secret"},
+        404: {"description": "Series not found"},
+    },
+)
+async def get_series(
+    series_id: str,
+    _: Annotated[None, Depends(_require_admin_secret)],
+):
     """Return metadata for a single series (progress, game IDs, status)."""
     r = await get_redis()
     meta = await r.hgetall(f"series:{series_id}:meta")
@@ -911,8 +958,11 @@ async def get_series(series_id: str):
     }
 
 
-@app.get("/series")
-async def list_series():
+@app.get(
+    "/series",
+    responses={403: {"description": "Invalid or missing admin secret"}},
+)
+async def list_series(_: Annotated[None, Depends(_require_admin_secret)]):
     """Return all series with their metadata."""
     r = await get_redis()
     series_ids = await r.smembers("series_index")
@@ -957,9 +1007,15 @@ async def spectate_series(
 
 @app.get(
     "/series/{series_id}/stats",
-    responses={404: {"description": "Series not found"}},
+    responses={
+        403: {"description": "Invalid or missing admin secret"},
+        404: {"description": "Series not found"},
+    },
 )
-async def series_stats(series_id: str):
+async def series_stats(
+    series_id: str,
+    _: Annotated[None, Depends(_require_admin_secret)],
+):
     """Return per-team scores and game IDs for a series."""
     r = await get_redis()
     exists = await r.exists(f"series:{series_id}:meta")
@@ -977,9 +1033,15 @@ async def series_stats(series_id: str):
 
 @app.get(
     "/series/{series_id}/scoreboard",
-    responses={404: {"description": "Series not found"}},
+    responses={
+        403: {"description": "Invalid or missing admin secret"},
+        404: {"description": "Series not found"},
+    },
 )
-async def series_scoreboard(series_id: str):
+async def series_scoreboard(
+    series_id: str,
+    _: Annotated[None, Depends(_require_admin_secret)],
+):
     """Return the ranked scoreboard for a specific series."""
     r = await get_redis()
     exists = await r.exists(f"series:{series_id}:meta")
@@ -996,8 +1058,11 @@ async def series_scoreboard(series_id: str):
 # ---------------------------------------------------------------------------
 
 
-@app.get("/scoreboard")
-async def get_scoreboard():
+@app.get(
+    "/scoreboard",
+    responses={403: {"description": "Invalid or missing admin secret"}},
+)
+async def get_scoreboard(_: Annotated[None, Depends(_require_admin_secret)]):
     """Return the global scoreboard with all teams ranked by score (descending)."""
     r = await get_redis()
     scores = await r.zrevrange("scoreboard", 0, -1, withscores=True)

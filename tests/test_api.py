@@ -124,12 +124,18 @@ class TestTeams:
     async def test_list_teams(self, async_client, fake_redis):
         await fake_redis.hset("teams", "Alpha", "some-token")
         async with async_client as c:
-            resp = await c.get("/teams")
+            resp = await c.get("/teams", headers=ADMIN_AUTH)
         assert resp.status_code == 200
         teams = resp.json()["teams"]
         assert len(teams) == 1
         assert teams[0]["team_name"] == "Alpha"
         assert teams[0]["connected"] is False
+
+    async def test_list_teams_no_auth(self, async_client, fake_redis):
+        await fake_redis.hset("teams", "Alpha", "some-token")
+        async with async_client as c:
+            resp = await c.get("/teams")
+        assert resp.status_code == 403
 
     async def test_delete_team(self, async_client, fake_redis):
         await fake_redis.hset("teams", "Alpha", "some-token")
@@ -295,15 +301,25 @@ class TestGames:
         async with async_client as c:
             create_resp = await c.post("/games", json={}, headers=ADMIN_AUTH)
             game_id = create_resp.json()["game_id"]
-            resp = await c.get(f"/games/{game_id}")
+            resp = await c.get(f"/games/{game_id}", headers=ADMIN_AUTH)
         assert resp.status_code == 200
         assert resp.json()["game_id"] == game_id
         assert resp.json()["phase"] == "lobby"
 
     async def test_get_game_not_found(self, async_client):
         async with async_client as c:
-            resp = await c.get("/games/nonexistent")
+            resp = await c.get("/games/nonexistent", headers=ADMIN_AUTH)
         assert resp.status_code == 404
+
+    async def test_list_games_no_auth(self, async_client):
+        async with async_client as c:
+            resp = await c.get("/games")
+        assert resp.status_code == 403
+
+    async def test_get_game_status_no_auth(self, async_client):
+        async with async_client as c:
+            resp = await c.get("/games/anything")
+        assert resp.status_code == 403
 
 
 def _make_mock_ws(
@@ -490,15 +506,65 @@ class TestAgentWebSocket:
 class TestScoreboard:
     async def test_empty_scoreboard(self, async_client):
         async with async_client as c:
-            resp = await c.get("/scoreboard")
+            resp = await c.get("/scoreboard", headers=ADMIN_AUTH)
         assert resp.status_code == 200
         assert resp.json()["standings"] == []
 
     async def test_scoreboard_with_data(self, async_client, fake_redis):
         await fake_redis.zadd("scoreboard", {"Alpha": 10, "Beta": 5})
         async with async_client as c:
-            resp = await c.get("/scoreboard")
+            resp = await c.get("/scoreboard", headers=ADMIN_AUTH)
         standings = resp.json()["standings"]
         assert len(standings) == 2
         assert standings[0]["team"] == "Alpha"
         assert standings[0]["score"] == 10
+
+    async def test_scoreboard_no_auth(self, async_client):
+        async with async_client as c:
+            resp = await c.get("/scoreboard")
+        assert resp.status_code == 403
+
+
+class TestAdminVerify:
+    async def test_verify_with_valid_secret(self, async_client):
+        async with async_client as c:
+            resp = await c.post("/admin/verify", headers=ADMIN_AUTH)
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "ok"
+
+    async def test_verify_no_auth(self, async_client):
+        async with async_client as c:
+            resp = await c.post("/admin/verify")
+        assert resp.status_code == 403
+
+    async def test_verify_wrong_secret(self, async_client):
+        async with async_client as c:
+            resp = await c.post(
+                "/admin/verify",
+                headers={"authorization": "Bearer not-the-secret"},
+            )
+        assert resp.status_code == 403
+
+
+class TestSpectatorEndpointGating:
+    """Newly-gated spectator GET endpoints all require the admin secret."""
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/teams",
+            "/teams/Alpha/status",
+            "/teams/Alpha/stats",
+            "/games",
+            "/games/anything",
+            "/series",
+            "/series/abc",
+            "/series/abc/stats",
+            "/series/abc/scoreboard",
+            "/scoreboard",
+        ],
+    )
+    async def test_endpoint_requires_admin_secret(self, async_client, path):
+        async with async_client as c:
+            resp = await c.get(path)
+        assert resp.status_code == 403
